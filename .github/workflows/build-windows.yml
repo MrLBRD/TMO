@@ -3,9 +3,9 @@ name: Build TMO Windows
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
     tags:
       - 'v*'
+    branches: [ main ]
     paths:
       - "main.py"
       - "core/**"
