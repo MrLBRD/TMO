@@ -1,0 +1,73 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build TMO Executable",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-Command",
+                    "& .venv\\Scripts\\Activate.ps1; pyinstaller TMO.spec"
+                ]
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build and Package TMO",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-Command",
+                    "Write-Host 'Activating virtual environment...' -ForegroundColor Cyan; & .venv\\Scripts\\Activate.ps1; Write-Host 'Pinning build dependencies (numpy/opencv)...' -ForegroundColor Cyan; pip install \"numpy<2,>=1.24\" \"opencv-python==4.7.0.72\"; Write-Host 'Building TMO executable...' -ForegroundColor Cyan; pyinstaller TMO.spec; if ($LASTEXITCODE -eq 0) { Write-Host 'Build successful! Creating distribution package...' -ForegroundColor Green; if (Test-Path 'TMO_Distribution') { Remove-Item -Recurse -Force 'TMO_Distribution' }; New-Item -ItemType Directory -Path 'TMO_Distribution' | Out-Null; Copy-Item 'dist\\TMO.exe' -Destination 'TMO_Distribution\\'; Copy-Item -Recurse 'chrome_extension' -Destination 'TMO_Distribution\\chrome_extension'; Copy-Item 'INSTALL.txt' -Destination 'TMO_Distribution\\'; Copy-Item 'README.md' -Destination 'TMO_Distribution\\'; Write-Host 'Package created in TMO_Distribution folder!' -ForegroundColor Green; Write-Host 'Contents:' -ForegroundColor Yellow; Get-ChildItem 'TMO_Distribution' | Format-Table Name } else { Write-Host 'Build failed!' -ForegroundColor Red }"
+                ]
+            },
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean Build Artifacts",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-Command",
+                    "Write-Host 'Cleaning build artifacts...' -ForegroundColor Yellow; if (Test-Path 'build') { Remove-Item -Recurse -Force 'build'; Write-Host 'Removed build/' -ForegroundColor Green }; if (Test-Path 'dist') { Remove-Item -Recurse -Force 'dist'; Write-Host 'Removed dist/' -ForegroundColor Green }; if (Test-Path 'TMO_Distribution') { Remove-Item -Recurse -Force 'TMO_Distribution'; Write-Host 'Removed TMO_Distribution/' -ForegroundColor Green }; Write-Host 'Clean complete!' -ForegroundColor Green"
+                ]
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run TMO (Development)",
+            "type": "shell",
+            "command": "${command:python.interpreterPath}",
+            "args": [
+                "main.py"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

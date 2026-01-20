@@ -1,0 +1,123 @@
+═══════════════════════════════════════════════════════════════
+  TMO - Television Match Official
+  Installation et Configuration
+═══════════════════════════════════════════════════════════════
+
+📋 PRÉREQUIS
+───────────────────────────────────────────────────────────────
+• Windows 10 ou supérieur
+• Webcam Logitech C270 (ou compatible)
+• Google Chrome installé
+• Visual C++ Redistributable (si erreur au lancement)
+  → https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+
+🚀 INSTALLATION
+───────────────────────────────────────────────────────────────
+
+1. Copiez TMO.exe où vous voulez (Bureau, Documents, etc.)
+
+2. Double-cliquez sur TMO.exe pour lancer
+
+3. Au premier lancement :
+   - Cliquez sur CONFIG
+   - Vérifiez la caméra détectée
+   - Configurez l'URL du site web
+   - Enregistrez
+
+
+🔧 CONFIGURATION DE L'EXTENSION CHROME
+───────────────────────────────────────────────────────────────
+
+Cette extension ferme automatiquement les anciens onglets.
+
+1. Ouvrez Chrome
+
+2. Allez dans : chrome://extensions/
+
+3. Activez "Mode développeur" (en haut à droite)
+
+4. Cliquez "Charger l'extension non empaquetée"
+
+5. Sélectionnez le dossier "chrome_extension"
+
+6. L'extension est installée !
+
+Raccourci clavier : Alt+Shift+L pour nettoyer manuellement
+
+
+📹 UTILISATION
+───────────────────────────────────────────────────────────────
+
+DÉMARRER UN ENREGISTREMENT :
+• Scannez le QR code de la commande
+  OU
+• Entrez l'ID manuellement et cliquez START
+
+L'overlay (petite fenêtre) indique l'état :
+• Gris "PRÊT" = En attente
+• Rouge "REC" + ID = Enregistrement en cours
+
+ARRÊTER :
+• Scannez le QR de la commande suivante (auto-stop)
+  OU
+• Cliquez STOP dans la fenêtre principale
+
+DÉPLACER L'OVERLAY :
+• Maintenez Ctrl + Clic et glissez
+
+
+📁 STOCKAGE
+───────────────────────────────────────────────────────────────
+
+Les vidéos sont sauvegardées dans :
+  %USERPROFILE%\Documents\TMO\output\
+
+Format : YYYY-MM-DD_ID-COMMANDE.mp4
+
+Rétention : 45 jours (configurable)
+
+
+⚙️ CONFIGURATION
+───────────────────────────────────────────────────────────────
+
+Fichier de config :
+  %APPDATA%\TMO\config.json
+
+Pour réinitialiser : Supprimez ce fichier
+
+
+🆘 DÉPANNAGE
+───────────────────────────────────────────────────────────────
+
+PROBLÈME : Caméra non détectée
+→ Branchez la webcam avant de lancer TMO
+→ Testez avec l'application Windows Caméra
+→ Dans CONFIG, cliquez "Rafraîchir"
+
+PROBLÈME : QR code non scanné
+→ Vérifiez l'éclairage (important pour C270)
+→ Nettoyez la lentille de la webcam
+→ Rapprochez le QR code de la caméra
+
+PROBLÈME : Chrome ne s'ouvre pas
+→ Vérifiez dans CONFIG que Chrome est détecté
+→ Installez Chrome si absent
+
+PROBLÈME : Extension ne fonctionne pas
+→ Vérifiez que le mode développeur est activé
+→ Rechargez l'extension dans chrome://extensions/
+
+
+📞 SUPPORT
+───────────────────────────────────────────────────────────────
+
+Pour toute question ou problème :
+→ Consultez le README.md
+→ GitHub Issues : https://github.com/anthropics/claude-code/issues
+
+
+═══════════════════════════════════════════════════════════════
+  Développé avec Claude Code
+  Version 1.0 - 2026
+═══════════════════════════════════════════════════════════════

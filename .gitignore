@@ -1,0 +1,28 @@
+# DS_Store
+.DS_Store
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Output and videos
+output/
+*.mp4
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Build artifacts
+build/
+dist/
+TMO_Distribution/
+*.zip
+
+# Keep these files
+!TMO.spec

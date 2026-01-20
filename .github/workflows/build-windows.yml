@@ -1,0 +1,50 @@
+name: Build TMO Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "main.py"
+      - "core/**"
+      - "requirements.txt"
+      - "TMO.spec"
+      - "installer.iss"
+      - ".github/workflows/build-windows.yml"
+      - "chrome_extension/**"
+      - "INSTALL.txt"
+      - "README.md"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "numpy<2,>=1.24" "opencv-python==4.7.0.72"
+          pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: |
+          python -m pip install pyinstaller
+          pyinstaller TMO.spec
+
+      - name: Build installer with Inno Setup
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: TMO_Setup
+          path: dist/TMO_Setup.exe
