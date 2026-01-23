@@ -5,21 +5,12 @@ on:
   push:
     tags:
       - 'v*'
-    branches: [ main ]
-    paths:
-      - "main.py"
-      - "core/**"
-      - "requirements.txt"
-      - "TMO.spec"
-      - "installer.iss"
-      - ".github/workflows/build-windows.yml"
-      - "chrome_extension/**"
-      - "INSTALL.txt"
-      - "README.md"
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
