@@ -146,3 +146,37 @@ def save_config(cfg: AppConfig) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+def _version_file_path() -> Path:
+    return _config_dir() / "last_version.txt"
+
+
+def get_last_run_version() -> str | None:
+    """Get the version from the last time the app was run."""
+    path = _version_file_path()
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except Exception:
+        return None
+
+
+def set_last_run_version(version: str) -> None:
+    """Store the current version for next run comparison."""
+    path = _version_file_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(version, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def check_if_just_updated(current_version: str) -> bool:
+    """Check if app was just updated (version changed since last run)."""
+    last_version = get_last_run_version()
+    if last_version is None:
+        # First run ever
+        return False
+    return last_version != current_version

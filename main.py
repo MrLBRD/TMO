@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 import ctypes
 from ctypes import wintypes
@@ -21,7 +21,7 @@ from PIL import Image
 from customtkinter import CTkImage
 import cv2
 
-from core.config import AppConfig, load_config, save_config, resolve_output_dir
+from core.config import AppConfig, load_config, save_config, resolve_output_dir, check_if_just_updated, set_last_run_version
 from core.network import send_status
 from core.recorder import Recorder, RecorderEvent, list_cameras
 from core.storage import clean_old_videos, disk_free_bytes, ensure_dir, format_bytes, is_valid_order_id, sanitize_order_id
@@ -999,9 +999,51 @@ class TmoApp(ctk.CTk):
         threading.Thread(target=_open_browser, name="tmo_browser", daemon=True).start()
 
 
+def _show_extension_reload_notice(parent: ctk.CTk) -> None:
+    """Show a dialog reminding user to reload the Chrome extension after update."""
+    dialog = ctk.CTkToplevel(parent)
+    dialog.title("Extension mise à jour")
+    dialog.geometry("420x180")
+    dialog.resizable(False, False)
+    dialog.grab_set()
+
+    try:
+        dialog.attributes("-topmost", True)
+    except Exception:
+        pass
+
+    dialog.grid_columnconfigure(0, weight=1)
+
+    ctk.CTkLabel(
+        dialog,
+        text="🔄 L'application a été mise à jour !",
+        font=("Arial", 16, "bold"),
+    ).grid(row=0, column=0, padx=20, pady=(20, 10))
+
+    ctk.CTkLabel(
+        dialog,
+        text="Pensez à recharger l'extension Chrome :\n"
+             "1. Ouvrir chrome://extensions\n"
+             "2. Cliquer sur 🔄 à côté de \"TMO Woo Admin Cleaner\"",
+        justify="left",
+    ).grid(row=1, column=0, padx=20, pady=10)
+
+    ctk.CTkButton(
+        dialog,
+        text="Compris",
+        command=dialog.destroy,
+    ).grid(row=2, column=0, padx=20, pady=(10, 20))
+
+    dialog.lift()
+
+
 def main() -> None:
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
+
+    # Check if app was just updated
+    just_updated = check_if_just_updated(__version__)
+    set_last_run_version(__version__)
 
     cfg = load_config()
     output_dir = resolve_output_dir(cfg)
@@ -1017,6 +1059,11 @@ def main() -> None:
     recorder.start()
 
     app = TmoApp(recorder=recorder, config=cfg)
+
+    # Show extension reload notice after update
+    if just_updated:
+        app.after(500, lambda: _show_extension_reload_notice(app))
+
     app.mainloop()
 
 
