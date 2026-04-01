@@ -124,6 +124,9 @@ class Recorder:
         camera_index: int = 0,
         camera_flip: str = "none",
         output_dir: Path | None = None,
+        scan_roi_percent: int = 90,
+        qr_brightness: int = 0,
+        qr_contrast: float = 1.0,
     ) -> None:
         self.camera_index = camera_index
         self.camera_flip = str(camera_flip or "none").strip().lower()
@@ -149,7 +152,10 @@ class Recorder:
         self._writer_thread: threading.Thread | None = None
         self._writer_control: dict[str, int | bool] | None = None
 
-        self.scan_roi_ratio = 0.75
+        self.scan_roi_ratio = max(0.1, min(1.0, scan_roi_percent / 100.0))
+        self._qr_brightness: int = int(qr_brightness)
+        self._qr_contrast: float = float(qr_contrast)
+        self._qr_paused: bool = False
         self.scan_cooldown_seconds = 1.0
         self.writer_queue_size = 120
 
@@ -201,6 +207,9 @@ class Recorder:
             if self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
+
+    def pause_qr(self, paused: bool) -> None:
+        self._qr_paused = paused
 
     def start(self) -> None:
         if self._capture_thread and self._capture_thread.is_alive():
@@ -426,12 +435,16 @@ class Recorder:
     def _scan_and_handle(self, frame: np.ndarray) -> None:
         if not self._qr_available:
             return
+        if self._qr_paused:
+            return
 
         roi = self._extract_scan_roi(frame)
 
         if self._qr_backend == "pyzbar" and zbar_decode is not None:
             try:
                 gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                if self._qr_brightness != 0 or abs(self._qr_contrast - 1.0) > 0.01:
+                    gray = cv2.convertScaleAbs(gray, alpha=self._qr_contrast, beta=self._qr_brightness)
             except Exception:
                 return
 

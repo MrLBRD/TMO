@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 import ctypes
 from ctypes import wintypes
@@ -77,14 +77,19 @@ class ConfigWindow(ctk.CTkToplevel):
         parent: ctk.CTk,
         config: AppConfig,
         on_apply: Callable[[AppConfig], None],
+        recorder: "Recorder",
     ) -> None:
         super().__init__(parent)
 
         self._on_apply = on_apply
         self._initial_config = config
+        self._recorder = recorder
+        self._preview_photo: CTkImage | None = None
+        self._preview_after_id: str | None = None
+        recorder.pause_qr(True)
 
         self.title("Configuration")
-        self.geometry("560x560")
+        self.geometry("640x960")
 
         self.grid_columnconfigure(1, weight=1)
 
@@ -150,25 +155,77 @@ class ConfigWindow(ctk.CTkToplevel):
         separator = ctk.CTkFrame(self, height=2, fg_color="#3f3f46")
         separator.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
 
+        # QR detection settings
+        ctk.CTkLabel(self, text="Réglages détection QR", font=("Arial", 13, "bold"), anchor="w").grid(
+            row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6)
+        )
+
+        ctk.CTkLabel(self, text="Zone scan (%)").grid(
+            row=9, column=0, sticky="w", padx=12, pady=6
+        )
+        self.roi_var = tk.IntVar(value=int(config.scan_roi_percent))
+        ctk.CTkSlider(
+            self, from_=50, to=100, number_of_steps=50, variable=self.roi_var,
+            command=self._on_slider_change,
+        ).grid(row=9, column=1, sticky="ew", padx=12, pady=6)
+        self.roi_value_label = ctk.CTkLabel(self, text=f"{config.scan_roi_percent}%", width=50, anchor="w")
+        self.roi_value_label.grid(row=9, column=2, sticky="w", padx=(0, 12), pady=6)
+
+        ctk.CTkLabel(self, text="Luminosité QR").grid(
+            row=10, column=0, sticky="w", padx=12, pady=6
+        )
+        self.brightness_var = tk.IntVar(value=int(config.qr_brightness))
+        ctk.CTkSlider(
+            self, from_=-100, to=100, number_of_steps=200, variable=self.brightness_var,
+            command=self._on_slider_change,
+        ).grid(row=10, column=1, sticky="ew", padx=12, pady=6)
+        b_sign = "+" if config.qr_brightness >= 0 else ""
+        self.brightness_value_label = ctk.CTkLabel(self, text=f"{b_sign}{config.qr_brightness}", width=50, anchor="w")
+        self.brightness_value_label.grid(row=10, column=2, sticky="w", padx=(0, 12), pady=6)
+
+        ctk.CTkLabel(self, text="Contraste QR").grid(
+            row=11, column=0, sticky="w", padx=12, pady=6
+        )
+        self.contrast_var = tk.DoubleVar(value=float(config.qr_contrast))
+        ctk.CTkSlider(
+            self, from_=0.5, to=3.0, number_of_steps=25, variable=self.contrast_var,
+            command=self._on_slider_change,
+        ).grid(row=11, column=1, sticky="ew", padx=12, pady=6)
+        self.contrast_value_label = ctk.CTkLabel(self, text=f"{config.qr_contrast:.2f}", width=50, anchor="w")
+        self.contrast_value_label.grid(row=11, column=2, sticky="w", padx=(0, 12), pady=6)
+
+        # Camera preview for QR calibration
+        self.preview_label = ctk.CTkLabel(self, text="Caméra indisponible", width=560, height=315)
+        self.preview_label.grid(row=12, column=0, columnspan=3, padx=12, pady=(6, 0))
+        ctk.CTkLabel(
+            self, text="Aperçu en direct — zone verte = zone de détection QR", font=("Arial", 11),
+            text_color="#9ca3af",
+        ).grid(row=13, column=0, columnspan=3, padx=12, pady=(2, 8))
+
+        # Separator 2
+        ctk.CTkFrame(self, height=2, fg_color="#3f3f46").grid(
+            row=14, column=0, columnspan=3, sticky="ew", padx=12, pady=8
+        )
+
         # Version and update section
         ctk.CTkLabel(self, text="Version").grid(
-            row=8, column=0, sticky="w", padx=12, pady=6
+            row=15, column=0, sticky="w", padx=12, pady=6
         )
         self.version_label = ctk.CTkLabel(self, text=f"v{__version__}", anchor="w")
-        self.version_label.grid(row=8, column=1, sticky="w", padx=12, pady=6)
+        self.version_label.grid(row=15, column=1, sticky="w", padx=12, pady=6)
         self.update_button = ctk.CTkButton(
             self, text="Vérifier MAJ", width=100, command=self._check_for_updates
         )
-        self.update_button.grid(row=8, column=2, sticky="e", padx=12, pady=6)
+        self.update_button.grid(row=15, column=2, sticky="e", padx=12, pady=6)
 
         self.update_status_label = ctk.CTkLabel(self, text="", anchor="w")
-        self.update_status_label.grid(row=9, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+        self.update_status_label.grid(row=16, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
 
         self.error_label = ctk.CTkLabel(self, text="", text_color="#ef4444", anchor="w")
-        self.error_label.grid(row=10, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
+        self.error_label.grid(row=17, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
 
         buttons = ctk.CTkFrame(self)
-        buttons.grid(row=11, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
+        buttons.grid(row=18, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
         buttons.grid_columnconfigure(0, weight=1)
 
         ctk.CTkButton(buttons, text="Annuler", command=self._on_cancel).grid(
@@ -182,6 +239,7 @@ class ConfigWindow(ctk.CTkToplevel):
         self._camera_refreshing = False
         self.after(10, lambda: self._refresh_cameras_async(max_index=10))
         self.after(50, self._detect_chrome)
+        self.after(100, self._update_preview)
 
         try:
             self.attributes("-topmost", True)
@@ -191,6 +249,58 @@ class ConfigWindow(ctk.CTkToplevel):
             self.lift()
         except Exception:
             pass
+
+    def destroy(self) -> None:
+        if self._preview_after_id is not None:
+            try:
+                self.after_cancel(self._preview_after_id)
+            except Exception:
+                pass
+            self._preview_after_id = None
+        self._recorder.pause_qr(False)
+        super().destroy()
+
+    def _on_slider_change(self, _=None) -> None:
+        roi = int(self.roi_var.get())
+        self.roi_value_label.configure(text=f"{roi}%")
+
+        b = int(self.brightness_var.get())
+        sign = "+" if b >= 0 else ""
+        self.brightness_value_label.configure(text=f"{sign}{b}")
+
+        c = float(self.contrast_var.get())
+        self.contrast_value_label.configure(text=f"{c:.2f}")
+
+    def _update_preview(self) -> None:
+        if not self.winfo_exists():
+            return
+
+        frame = self._recorder.get_latest_frame()
+        if frame is not None:
+            try:
+                brightness = int(self.brightness_var.get())
+                contrast = float(self.contrast_var.get())
+                roi_ratio = int(self.roi_var.get()) / 100.0
+
+                adjusted = cv2.convertScaleAbs(frame, alpha=contrast, beta=brightness)
+
+                h, w = adjusted.shape[:2]
+                roi_w = int(w * roi_ratio)
+                roi_h = int(h * roi_ratio)
+                x1 = (w - roi_w) // 2
+                y1 = (h - roi_h) // 2
+                cv2.rectangle(adjusted, (x1, y1), (x1 + roi_w, y1 + roi_h), (0, 255, 0), 2)
+
+                rgb = cv2.cvtColor(adjusted, cv2.COLOR_BGR2RGB)
+                resized = cv2.resize(rgb, (560, 315))
+                img = Image.fromarray(resized)
+                photo = CTkImage(light_image=img, dark_image=img, size=(560, 315))
+                self._preview_photo = photo
+                self.preview_label.configure(image=photo, text="")
+            except Exception:
+                pass
+
+        self._preview_after_id = self.after(100, self._update_preview)
 
     def _detect_chrome(self) -> None:
         try:
@@ -435,6 +545,9 @@ class ConfigWindow(ctk.CTkToplevel):
             api_url=self._initial_config.api_url,
             site_url=self.site_entry.get().strip(),
             api_key=self._initial_config.api_key,
+            scan_roi_percent=int(self.roi_var.get()),
+            qr_brightness=int(self.brightness_var.get()),
+            qr_contrast=round(float(self.contrast_var.get()), 2),
         )
 
         self._on_apply(cfg)
@@ -1168,6 +1281,7 @@ class TmoApp(ctk.CTk):
             parent=self,
             config=self.config,
             on_apply=self._apply_config,
+            recorder=self.recorder,
         )
         try:
             self._config_window.lift()
@@ -1196,6 +1310,9 @@ class TmoApp(ctk.CTk):
             camera_index=cfg.camera_index,
             camera_flip=cfg.camera_flip,
             output_dir=output_dir,
+            scan_roi_percent=cfg.scan_roi_percent,
+            qr_brightness=cfg.qr_brightness,
+            qr_contrast=cfg.qr_contrast,
         )
         self.recorder.start()
         try:
@@ -1300,6 +1417,9 @@ def main() -> None:
         camera_index=cfg.camera_index,
         camera_flip=cfg.camera_flip,
         output_dir=output_dir,
+        scan_roi_percent=cfg.scan_roi_percent,
+        qr_brightness=cfg.qr_brightness,
+        qr_contrast=cfg.qr_contrast,
     )
     recorder.start()
 

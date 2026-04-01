@@ -19,6 +19,9 @@ class AppConfig:
     api_url: str = ""
     site_url: str = ""
     api_key: str = ""
+    scan_roi_percent: int = 90
+    qr_brightness: int = 0
+    qr_contrast: float = 1.0
 
 
 def _config_dir() -> Path:
@@ -97,6 +100,27 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
     if api_key is not None and api_key.strip() != "":
         cfg.api_key = api_key
 
+    scan_roi_percent = os.environ.get("TMO_SCAN_ROI_PERCENT")
+    if scan_roi_percent is not None and scan_roi_percent.strip() != "":
+        try:
+            cfg.scan_roi_percent = max(50, min(100, int(scan_roi_percent)))
+        except ValueError:
+            pass
+
+    qr_brightness = os.environ.get("TMO_QR_BRIGHTNESS")
+    if qr_brightness is not None and qr_brightness.strip() != "":
+        try:
+            cfg.qr_brightness = max(-100, min(100, int(qr_brightness)))
+        except ValueError:
+            pass
+
+    qr_contrast = os.environ.get("TMO_QR_CONTRAST")
+    if qr_contrast is not None and qr_contrast.strip() != "":
+        try:
+            cfg.qr_contrast = max(0.5, min(3.0, float(qr_contrast)))
+        except ValueError:
+            pass
+
     return cfg
 
 
@@ -146,6 +170,21 @@ def load_config() -> AppConfig:
                 if "api_key" in data:
                     try:
                         cfg.api_key = str(data["api_key"])
+                    except Exception:
+                        pass
+                if "scan_roi_percent" in data:
+                    try:
+                        cfg.scan_roi_percent = max(50, min(100, int(data["scan_roi_percent"])))
+                    except Exception:
+                        pass
+                if "qr_brightness" in data:
+                    try:
+                        cfg.qr_brightness = max(-100, min(100, int(data["qr_brightness"])))
+                    except Exception:
+                        pass
+                if "qr_contrast" in data:
+                    try:
+                        cfg.qr_contrast = max(0.5, min(3.0, float(data["qr_contrast"])))
                     except Exception:
                         pass
         except Exception:
