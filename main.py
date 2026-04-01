@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.0.2"
+__version__ = "1.1.0"
 
 import ctypes
 from ctypes import wintypes
@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import queue
 import threading
+import time
 import sys
 from typing import Callable
 import webbrowser
@@ -83,7 +84,7 @@ class ConfigWindow(ctk.CTkToplevel):
         self._initial_config = config
 
         self.title("Configuration")
-        self.geometry("560x520")
+        self.geometry("560x560")
 
         self.grid_columnconfigure(1, weight=1)
 
@@ -124,43 +125,50 @@ class ConfigWindow(ctk.CTkToplevel):
         self.retention_entry.insert(0, str(config.retention_days))
         self.retention_entry.grid(row=3, column=1, sticky="ew", padx=12, pady=6)
 
-        ctk.CTkLabel(self, text="Site").grid(
+        ctk.CTkLabel(self, text="Durée max enreg. (min)").grid(
             row=4, column=0, sticky="w", padx=12, pady=6
+        )
+        self.max_rec_entry = ctk.CTkEntry(self)
+        self.max_rec_entry.insert(0, str(config.max_recording_minutes))
+        self.max_rec_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
+
+        ctk.CTkLabel(self, text="Site").grid(
+            row=5, column=0, sticky="w", padx=12, pady=6
         )
         self.site_entry = ctk.CTkEntry(self)
         self.site_entry.insert(0, config.site_url)
-        self.site_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
+        self.site_entry.grid(row=5, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
 
         # Chrome status indicator
         ctk.CTkLabel(self, text="Chrome").grid(
-            row=5, column=0, sticky="w", padx=12, pady=6
+            row=6, column=0, sticky="w", padx=12, pady=6
         )
         self.chrome_status_label = ctk.CTkLabel(self, text="Détection...", anchor="w")
-        self.chrome_status_label.grid(row=5, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
+        self.chrome_status_label.grid(row=6, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
 
         # Separator
         separator = ctk.CTkFrame(self, height=2, fg_color="#3f3f46")
-        separator.grid(row=6, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
+        separator.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
 
         # Version and update section
         ctk.CTkLabel(self, text="Version").grid(
-            row=7, column=0, sticky="w", padx=12, pady=6
+            row=8, column=0, sticky="w", padx=12, pady=6
         )
         self.version_label = ctk.CTkLabel(self, text=f"v{__version__}", anchor="w")
-        self.version_label.grid(row=7, column=1, sticky="w", padx=12, pady=6)
+        self.version_label.grid(row=8, column=1, sticky="w", padx=12, pady=6)
         self.update_button = ctk.CTkButton(
             self, text="Vérifier MAJ", width=100, command=self._check_for_updates
         )
-        self.update_button.grid(row=7, column=2, sticky="e", padx=12, pady=6)
+        self.update_button.grid(row=8, column=2, sticky="e", padx=12, pady=6)
 
         self.update_status_label = ctk.CTkLabel(self, text="", anchor="w")
-        self.update_status_label.grid(row=8, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+        self.update_status_label.grid(row=9, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
 
         self.error_label = ctk.CTkLabel(self, text="", text_color="#ef4444", anchor="w")
-        self.error_label.grid(row=9, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
+        self.error_label.grid(row=10, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
 
         buttons = ctk.CTkFrame(self)
-        buttons.grid(row=10, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
+        buttons.grid(row=11, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
         buttons.grid_columnconfigure(0, weight=1)
 
         ctk.CTkButton(buttons, text="Annuler", command=self._on_cancel).grid(
@@ -408,11 +416,22 @@ class ConfigWindow(ctk.CTkToplevel):
             self.error_label.configure(text="La rétention doit être > 0")
             return
 
+        try:
+            max_recording_minutes = int(self.max_rec_entry.get().strip() or "15")
+        except ValueError:
+            self.error_label.configure(text="Durée max enregistrement invalide")
+            return
+
+        if max_recording_minutes < 1:
+            self.error_label.configure(text="La durée max doit être >= 1 minute")
+            return
+
         cfg = AppConfig(
             camera_index=camera_index,
             camera_flip=self.flip_var.get().strip(),
             output_dir=self.output_entry.get().strip(),
             retention_days=retention_days,
+            max_recording_minutes=max_recording_minutes,
             api_url=self._initial_config.api_url,
             site_url=self.site_entry.get().strip(),
             api_key=self._initial_config.api_key,
@@ -644,6 +663,185 @@ class OverlayWindow(ctk.CTkToplevel):
             return
 
 
+DMS_POPUP_COUNTDOWN_SECONDS = 60
+
+
+class DeadManSwitchDialog(ctk.CTkToplevel):
+    def __init__(
+        self,
+        parent: ctk.CTk,
+        order_id: str,
+        on_continue: Callable[[], None],
+        on_stop: Callable[[], None],
+    ) -> None:
+        super().__init__(parent)
+
+        self._on_continue = on_continue
+        self._on_stop = on_stop
+        self._remaining = DMS_POPUP_COUNTDOWN_SECONDS
+        self._resolved = False
+        self._countdown_after_id: str | None = None
+
+        self.title("TMO - Enregistrement en cours")
+        self.geometry("480x240")
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self._do_continue)
+
+        try:
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            self,
+            text=f"Enregistrement en cours : {order_id}",
+            font=("Arial", 16, "bold"),
+        ).grid(row=0, column=0, padx=24, pady=(24, 8))
+
+        ctk.CTkLabel(
+            self,
+            text="Êtes-vous toujours là ?",
+            font=("Arial", 14),
+        ).grid(row=1, column=0, padx=24, pady=(0, 8))
+
+        self._countdown_label = ctk.CTkLabel(
+            self,
+            text=self._countdown_text(),
+            font=("Arial", 13),
+            text_color="#f59e0b",
+        )
+        self._countdown_label.grid(row=2, column=0, padx=24, pady=(0, 16))
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=3, column=0, padx=24, pady=(0, 24))
+
+        ctk.CTkButton(
+            btn_frame,
+            text="Je suis là",
+            fg_color="#15803d",
+            hover_color="#166534",
+            width=160,
+            height=40,
+            font=("Arial", 14, "bold"),
+            command=self._do_continue,
+        ).grid(row=0, column=0, padx=(0, 12))
+
+        ctk.CTkButton(
+            btn_frame,
+            text="Arrêter",
+            fg_color="#b91c1c",
+            hover_color="#991b1b",
+            width=160,
+            height=40,
+            font=("Arial", 14, "bold"),
+            command=self._do_stop,
+        ).grid(row=0, column=1)
+
+        self._beep()
+        self._force_focus()
+        self._tick()
+
+    def _countdown_text(self) -> str:
+        return f"Arrêt automatique dans {self._remaining}s"
+
+    def _tick(self) -> None:
+        if self._resolved:
+            return
+        if not self.winfo_exists():
+            return
+
+        if self._remaining <= 0:
+            self._do_stop()
+            return
+
+        self._countdown_label.configure(text=self._countdown_text())
+
+        if self._remaining <= 10:
+            self._countdown_label.configure(text_color="#ef4444")
+            self._beep()
+
+        self._remaining -= 1
+        self._countdown_after_id = self.after(1000, self._tick)
+
+    def _do_continue(self) -> None:
+        if self._resolved:
+            return
+        self._resolved = True
+        if self._countdown_after_id is not None:
+            try:
+                self.after_cancel(self._countdown_after_id)
+            except Exception:
+                pass
+        self._on_continue()
+        self.destroy()
+
+    def _do_stop(self) -> None:
+        if self._resolved:
+            return
+        self._resolved = True
+        if self._countdown_after_id is not None:
+            try:
+                self.after_cancel(self._countdown_after_id)
+            except Exception:
+                pass
+        self._on_stop()
+        self.destroy()
+
+    def _beep(self) -> None:
+        try:
+            import winsound
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+
+    def _force_focus(self) -> None:
+        try:
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+        if os.name == "nt":
+            try:
+                hwnd = int(self.winfo_id())
+                GA_ROOT = 2
+                root_hwnd = ctypes.windll.user32.GetAncestor(hwnd, GA_ROOT)
+                target = root_hwnd if root_hwnd else hwnd
+
+                SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001
+                ctypes.windll.user32.SystemParametersInfoW(
+                    SPI_SETFOREGROUNDLOCKTIMEOUT, 0, 0, 0
+                )
+                ctypes.windll.user32.SetForegroundWindow(target)
+
+                FLASHW_ALL = 0x00000003
+                FLASHW_TIMERNOFG = 0x0000000C
+
+                class FLASHWINFO(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", ctypes.c_uint),
+                        ("hwnd", ctypes.c_void_p),
+                        ("dwFlags", ctypes.c_uint),
+                        ("uCount", ctypes.c_uint),
+                        ("dwTimeout", ctypes.c_uint),
+                    ]
+
+                finfo = FLASHWINFO()
+                finfo.cbSize = ctypes.sizeof(FLASHWINFO)
+                finfo.hwnd = target
+                finfo.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG
+                finfo.uCount = 5
+                finfo.dwTimeout = 0
+                ctypes.windll.user32.FlashWindowEx(ctypes.byref(finfo))
+            except Exception:
+                pass
+
+
 class TmoApp(ctk.CTk):
     def __init__(self, recorder: Recorder, config: AppConfig) -> None:
         super().__init__()
@@ -720,6 +918,8 @@ class TmoApp(ctk.CTk):
         self._disk_check_after_id: str | None = None
         self._overlay_window: OverlayWindow | None = None
         self._closing: bool = False
+        self._dms_dialog: DeadManSwitchDialog | None = None
+        self._dms_last_reset: float = 0.0
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -827,17 +1027,22 @@ class TmoApp(ctk.CTk):
         except queue.Empty:
             pass
 
+        self._check_dead_man_switch()
+
         if not self._closing:
             self.after(20, self._poll_events)  # 20ms for faster event response
 
     def _handle_event(self, ev: RecorderEvent) -> None:
         if ev.type == "recording_started" and ev.order_id:
+            self._dms_last_reset = time.time()
+            self._dismiss_dms_dialog()
             self._set_status(f"Enregistrement en cours : {ev.order_id}")
             self.update_idletasks()
             self._send_status_async(ev.order_id, "video_started")
             self._open_order_modal(ev.order_id)
 
         elif ev.type == "recording_stopped" and ev.order_id:
+            self._dismiss_dms_dialog()
             self._set_status(self._ready_status_text())
             self._send_status_async(ev.order_id, "video_stopped")
 
@@ -888,6 +1093,46 @@ class TmoApp(ctk.CTk):
             self._set_status(f"Enregistrement en cours : {order_id}")
         else:
             self._set_status(self._ready_status_text())
+
+    def _check_dead_man_switch(self) -> None:
+        if not self.recorder.is_recording:
+            return
+
+        max_minutes = self.config.max_recording_minutes
+        if max_minutes <= 0:
+            return
+
+        if self._dms_dialog is not None:
+            return
+
+        elapsed = time.time() - self._dms_last_reset
+        if elapsed < max_minutes * 60:
+            return
+
+        order_id = self.recorder.recording_order_id or "?"
+        self._dms_dialog = DeadManSwitchDialog(
+            parent=self,
+            order_id=order_id,
+            on_continue=self._dms_on_continue,
+            on_stop=self._dms_on_stop,
+        )
+
+    def _dms_on_continue(self) -> None:
+        self._dms_last_reset = time.time()
+        self._dms_dialog = None
+
+    def _dms_on_stop(self) -> None:
+        self._dms_dialog = None
+        self.recorder.stop_recording(wait=False)
+
+    def _dismiss_dms_dialog(self) -> None:
+        if self._dms_dialog is not None:
+            try:
+                self._dms_dialog._resolved = True
+                self._dms_dialog.destroy()
+            except Exception:
+                pass
+            self._dms_dialog = None
 
     def _start_from_raw(self, raw: str) -> None:
         raw = str(raw or "").strip()

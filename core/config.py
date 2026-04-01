@@ -15,6 +15,7 @@ class AppConfig:
     camera_flip: str = "none"
     output_dir: str = ""
     retention_days: int = 45
+    max_recording_minutes: int = 15
     api_url: str = ""
     site_url: str = ""
     api_key: str = ""
@@ -77,6 +78,13 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         except ValueError:
             pass
 
+    max_recording_minutes = os.environ.get("TMO_MAX_RECORDING_MINUTES")
+    if max_recording_minutes is not None and max_recording_minutes.strip() != "":
+        try:
+            cfg.max_recording_minutes = int(max_recording_minutes)
+        except ValueError:
+            pass
+
     api_url = os.environ.get("TMO_API_URL")
     if api_url is not None and api_url.strip() != "":
         cfg.api_url = api_url
@@ -118,6 +126,11 @@ def load_config() -> AppConfig:
                 if "retention_days" in data:
                     try:
                         cfg.retention_days = int(data["retention_days"])
+                    except Exception:
+                        pass
+                if "max_recording_minutes" in data:
+                    try:
+                        cfg.max_recording_minutes = int(data["max_recording_minutes"])
                     except Exception:
                         pass
                 if "api_url" in data:
