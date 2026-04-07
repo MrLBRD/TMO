@@ -3,3 +3,4 @@ opencv-python==4.13.0.92
 pyzbar==0.1.9
 customtkinter==5.2.2
 pillow==12.2.0
+requests==2.33.1
