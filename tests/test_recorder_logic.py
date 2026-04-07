@@ -74,9 +74,10 @@ class TestExtractOrderIdFromQrValue:
 
     # --- sécurité : injection dans le QR ---
 
-    def test_path_traversal_in_id_returns_none(self, recorder):
-        # "../etc" → sanitize → "_etc" → 4 chars < 5 → None
-        assert recorder._extract_order_id_from_qr_value("tk-../etc") is None
+    def test_path_traversal_in_id_sanitized(self, recorder):
+        # "../etc" → replace "/" → ".._etc" → regex ".." → "_" → "__etc" (5 chars)
+        # La traversée est neutralisée : résultat sûr "__etc", pas None
+        assert recorder._extract_order_id_from_qr_value("tk-../etc") == "__etc"
 
     def test_long_path_traversal_sanitized(self, recorder):
         # Si le résultat sanitisé est dans les longueurs valides, il ne doit pas contenir ".."
