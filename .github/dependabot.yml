@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Met à jour les SHAs des actions GitHub automatiquement
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Met à jour les dépendances Python à faible risque
+  # opencv-python, customtkinter et pyinstaller sont exclus :
+  # ils nécessitent un test de build complet avant mise à jour
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    ignore:
+      - dependency-name: "opencv-python"
+      - dependency-name: "customtkinter"
+      - dependency-name: "pyinstaller"

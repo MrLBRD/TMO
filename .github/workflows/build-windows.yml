@@ -7,46 +7,98 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    runs-on: windows-latest
+  test:
+    runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2 # v5.3.0
         with:
           python-version: "3.11"
 
-      - name: Install build deps (pinned)
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libzbar0 libglib2.0-0
+
+      - name: Install Python dependencies
+        run: |
+          pip install pytest
+          pip install "numpy>=1.24,<2" "opencv-python-headless==4.7.0.72"
+          pip install pyzbar==0.1.9 pillow==11.1.0 requests==2.32.3
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2 # v5.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "numpy<2,>=1.24" "opencv-python==4.7.0.72"
           pip install -r requirements.txt
 
       - name: Build with PyInstaller
         run: |
-          python -m pip install pyinstaller
+          pip install "pyinstaller==6.10.0"
           pyinstaller TMO.spec
 
       - name: Build installer with Inno Setup
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
+      - name: Generate SHA256
+        run: |
+          $hash = Get-FileHash dist/TMO_Setup.exe -Algorithm SHA256
+          "$($hash.Hash.ToLower())  TMO_Setup.exe" | Out-File -FilePath dist/TMO_Setup.exe.sha256 -Encoding ASCII -NoNewline
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340658 # v4.6.0
         with:
           name: TMO_Setup
-          path: dist/TMO_Setup.exe
+          path: |
+            dist/TMO_Setup.exe
+            dist/TMO_Setup.exe.sha256
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TMO_Setup
+          path: dist
 
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c062e08bd532815e2082a7e09ce9571a6e1139c # v2.2.1
         with:
-          files: dist/TMO_Setup.exe
+          files: |
+            dist/TMO_Setup.exe
+            dist/TMO_Setup.exe.sha256
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

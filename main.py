@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 import ctypes
 from ctypes import wintypes
@@ -12,7 +12,6 @@ import time
 import sys
 from typing import Callable
 import webbrowser
-from urllib.parse import urljoin
 
 from tkinter import filedialog
 import tkinter as tk
@@ -22,11 +21,14 @@ from PIL import Image
 from customtkinter import CTkImage
 import cv2
 
-from core.config import AppConfig, load_config, save_config, resolve_output_dir, check_if_just_updated, set_last_run_version
-from core.network import send_status
+from core.config import AppConfig, load_config, log_path, save_config, resolve_output_dir, check_if_just_updated, set_last_run_version
+from core.logging_setup import setup_logging
 from core.recorder import Recorder, RecorderEvent, list_cameras
 from core.storage import clean_old_videos, disk_free_bytes, ensure_dir, format_bytes, is_valid_order_id, sanitize_order_id
 from core.updater import UpdateInfo, check_for_updates_async, download_update, run_installer
+
+import logging
+log = logging.getLogger(__name__)
 
 DISPLAY_WIDTH = 960
 DISPLAY_HEIGHT = 540
@@ -89,151 +91,167 @@ class ConfigWindow(ctk.CTkToplevel):
         recorder.pause_qr(True)
 
         self.title("Configuration")
-        self.geometry("640x960")
+        self.geometry("680x700")
 
-        self.grid_columnconfigure(1, weight=1)
+        # Buttons + error always visible at the bottom (outside the scroll)
+        # Pack order with side="bottom": first packed = lowest position
+        _btn_bar = ctk.CTkFrame(self)
+        _btn_bar.pack(side="bottom", fill="x", padx=12, pady=(4, 8))
 
-        ctk.CTkLabel(self, text="Camera index").grid(
+        self.error_label = ctk.CTkLabel(self, text="", text_color="#ef4444", anchor="w")
+        self.error_label.pack(side="bottom", fill="x", padx=12, pady=(0, 2))
+        _btn_bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkButton(_btn_bar, text="Annuler", command=self._on_cancel).grid(
+            row=0, column=1, padx=(6, 0), pady=0
+        )
+        ctk.CTkButton(_btn_bar, text="Enregistrer", command=self._on_save).grid(
+            row=0, column=2, padx=(6, 0), pady=0
+        )
+
+        # Scrollable content area
+        self._scroll = ctk.CTkScrollableFrame(self)
+        self._scroll.pack(fill="both", expand=True)
+        self._scroll.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(self._scroll, text="Camera index").grid(
             row=0, column=0, sticky="w", padx=12, pady=(12, 6)
         )
         self.camera_var = tk.StringVar(value=str(config.camera_index))
-        self.camera_menu = ctk.CTkOptionMenu(self, variable=self.camera_var, values=[str(config.camera_index)])
+        self.camera_menu = ctk.CTkOptionMenu(self._scroll, variable=self.camera_var, values=[str(config.camera_index)])
         self.camera_menu.grid(row=0, column=1, sticky="ew", padx=12, pady=(12, 6))
-        self.refresh_button = ctk.CTkButton(self, text="Rafraîchir", command=self._refresh_cameras)
+        self.refresh_button = ctk.CTkButton(self._scroll, text="Rafraîchir", command=self._refresh_cameras)
         self.refresh_button.grid(row=0, column=2, sticky="e", padx=(0, 12), pady=(12, 6))
 
-        ctk.CTkLabel(self, text="Flip caméra").grid(
+        ctk.CTkLabel(self._scroll, text="Flip caméra").grid(
             row=1, column=0, sticky="w", padx=12, pady=6
         )
         self.flip_var = tk.StringVar(value=(config.camera_flip or "none"))
         self.flip_menu = ctk.CTkOptionMenu(
-            self,
+            self._scroll,
             variable=self.flip_var,
             values=["none", "horizontal", "vertical", "both"],
         )
         self.flip_menu.grid(row=1, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
 
-        ctk.CTkLabel(self, text="Dossier vidéos").grid(
+        ctk.CTkLabel(self._scroll, text="Dossier vidéos").grid(
             row=2, column=0, sticky="w", padx=12, pady=6
         )
-        self.output_entry = ctk.CTkEntry(self)
+        self.output_entry = ctk.CTkEntry(self._scroll)
         self.output_entry.insert(0, config.output_dir)
         self.output_entry.grid(row=2, column=1, sticky="ew", padx=12, pady=6)
-        ctk.CTkButton(self, text="Choisir", command=self._browse_output_dir).grid(
+        ctk.CTkButton(self._scroll, text="Choisir", command=self._browse_output_dir).grid(
             row=2, column=2, sticky="e", padx=(0, 12), pady=6
         )
 
-        ctk.CTkLabel(self, text="Rétention (jours)").grid(
+        ctk.CTkLabel(self._scroll, text="Rétention (jours)").grid(
             row=3, column=0, sticky="w", padx=12, pady=6
         )
-        self.retention_entry = ctk.CTkEntry(self)
+        self.retention_entry = ctk.CTkEntry(self._scroll)
         self.retention_entry.insert(0, str(config.retention_days))
         self.retention_entry.grid(row=3, column=1, sticky="ew", padx=12, pady=6)
 
-        ctk.CTkLabel(self, text="Durée max enreg. (min)").grid(
+        ctk.CTkLabel(self._scroll, text="Durée max enreg. (min)").grid(
             row=4, column=0, sticky="w", padx=12, pady=6
         )
-        self.max_rec_entry = ctk.CTkEntry(self)
+        self.max_rec_entry = ctk.CTkEntry(self._scroll)
         self.max_rec_entry.insert(0, str(config.max_recording_minutes))
         self.max_rec_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
 
-        ctk.CTkLabel(self, text="Site").grid(
+        ctk.CTkLabel(self._scroll, text="Site").grid(
             row=5, column=0, sticky="w", padx=12, pady=6
         )
-        self.site_entry = ctk.CTkEntry(self)
+        self.site_entry = ctk.CTkEntry(self._scroll)
         self.site_entry.insert(0, config.site_url)
         self.site_entry.grid(row=5, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
 
         # Chrome status indicator
-        ctk.CTkLabel(self, text="Chrome").grid(
+        ctk.CTkLabel(self._scroll, text="Chrome").grid(
             row=6, column=0, sticky="w", padx=12, pady=6
         )
-        self.chrome_status_label = ctk.CTkLabel(self, text="Détection...", anchor="w")
+        self.chrome_status_label = ctk.CTkLabel(self._scroll, text="Détection...", anchor="w")
         self.chrome_status_label.grid(row=6, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
 
         # Separator
-        separator = ctk.CTkFrame(self, height=2, fg_color="#3f3f46")
-        separator.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
+        ctk.CTkFrame(self._scroll, height=2, fg_color="#3f3f46").grid(
+            row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=12
+        )
 
         # QR detection settings
-        ctk.CTkLabel(self, text="Réglages détection QR", font=("Arial", 13, "bold"), anchor="w").grid(
+        ctk.CTkLabel(self._scroll, text="Réglages détection QR", font=("Arial", 13, "bold"), anchor="w").grid(
             row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6)
         )
 
-        ctk.CTkLabel(self, text="Zone scan (%)").grid(
+        ctk.CTkLabel(self._scroll, text="Zone scan (%)").grid(
             row=9, column=0, sticky="w", padx=12, pady=6
         )
         self.roi_var = tk.IntVar(value=int(config.scan_roi_percent))
         ctk.CTkSlider(
-            self, from_=50, to=100, number_of_steps=50, variable=self.roi_var,
+            self._scroll, from_=50, to=100, number_of_steps=50, variable=self.roi_var,
             command=self._on_slider_change,
         ).grid(row=9, column=1, sticky="ew", padx=12, pady=6)
-        self.roi_value_label = ctk.CTkLabel(self, text=f"{config.scan_roi_percent}%", width=50, anchor="w")
+        self.roi_value_label = ctk.CTkLabel(self._scroll, text=f"{config.scan_roi_percent}%", width=50, anchor="w")
         self.roi_value_label.grid(row=9, column=2, sticky="w", padx=(0, 12), pady=6)
 
-        ctk.CTkLabel(self, text="Luminosité QR").grid(
+        ctk.CTkLabel(self._scroll, text="Luminosité QR").grid(
             row=10, column=0, sticky="w", padx=12, pady=6
         )
         self.brightness_var = tk.IntVar(value=int(config.qr_brightness))
         ctk.CTkSlider(
-            self, from_=-100, to=100, number_of_steps=200, variable=self.brightness_var,
+            self._scroll, from_=-100, to=100, number_of_steps=200, variable=self.brightness_var,
             command=self._on_slider_change,
         ).grid(row=10, column=1, sticky="ew", padx=12, pady=6)
         b_sign = "+" if config.qr_brightness >= 0 else ""
-        self.brightness_value_label = ctk.CTkLabel(self, text=f"{b_sign}{config.qr_brightness}", width=50, anchor="w")
+        self.brightness_value_label = ctk.CTkLabel(self._scroll, text=f"{b_sign}{config.qr_brightness}", width=50, anchor="w")
         self.brightness_value_label.grid(row=10, column=2, sticky="w", padx=(0, 12), pady=6)
 
-        ctk.CTkLabel(self, text="Contraste QR").grid(
+        ctk.CTkLabel(self._scroll, text="Contraste QR").grid(
             row=11, column=0, sticky="w", padx=12, pady=6
         )
         self.contrast_var = tk.DoubleVar(value=float(config.qr_contrast))
         ctk.CTkSlider(
-            self, from_=0.5, to=3.0, number_of_steps=25, variable=self.contrast_var,
+            self._scroll, from_=0.5, to=3.0, number_of_steps=25, variable=self.contrast_var,
             command=self._on_slider_change,
         ).grid(row=11, column=1, sticky="ew", padx=12, pady=6)
-        self.contrast_value_label = ctk.CTkLabel(self, text=f"{config.qr_contrast:.2f}", width=50, anchor="w")
+        self.contrast_value_label = ctk.CTkLabel(self._scroll, text=f"{config.qr_contrast:.2f}", width=50, anchor="w")
         self.contrast_value_label.grid(row=11, column=2, sticky="w", padx=(0, 12), pady=6)
 
         # Camera preview for QR calibration
-        self.preview_label = ctk.CTkLabel(self, text="Caméra indisponible", width=560, height=315)
+        self.preview_label = ctk.CTkLabel(self._scroll, text="En attente de la caméra...", width=560, height=315)
         self.preview_label.grid(row=12, column=0, columnspan=3, padx=12, pady=(6, 0))
         ctk.CTkLabel(
-            self, text="Aperçu en direct — zone verte = zone de détection QR", font=("Arial", 11),
-            text_color="#9ca3af",
-        ).grid(row=13, column=0, columnspan=3, padx=12, pady=(2, 8))
+            self._scroll, text="Aperçu niveaux de gris — image exacte analysée par le scanner QR",
+            font=("Arial", 11), text_color="#9ca3af",
+        ).grid(row=13, column=0, columnspan=3, padx=12, pady=(2, 4))
+
+        # Auto-calibration
+        self.calibration_label = ctk.CTkLabel(
+            self._scroll, text="Cadrez un QR code puis cliquez Calibrer",
+            anchor="w", text_color="#9ca3af", font=("Arial", 11),
+        )
+        self.calibration_label.grid(row=14, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 6))
+        self.calibrate_button = ctk.CTkButton(
+            self._scroll, text="Calibrer", width=100, command=self._start_calibration
+        )
+        self.calibrate_button.grid(row=14, column=2, sticky="e", padx=12, pady=(4, 6))
 
         # Separator 2
-        ctk.CTkFrame(self, height=2, fg_color="#3f3f46").grid(
-            row=14, column=0, columnspan=3, sticky="ew", padx=12, pady=8
+        ctk.CTkFrame(self._scroll, height=2, fg_color="#3f3f46").grid(
+            row=15, column=0, columnspan=3, sticky="ew", padx=12, pady=8
         )
 
         # Version and update section
-        ctk.CTkLabel(self, text="Version").grid(
-            row=15, column=0, sticky="w", padx=12, pady=6
+        ctk.CTkLabel(self._scroll, text="Version").grid(
+            row=16, column=0, sticky="w", padx=12, pady=6
         )
-        self.version_label = ctk.CTkLabel(self, text=f"v{__version__}", anchor="w")
-        self.version_label.grid(row=15, column=1, sticky="w", padx=12, pady=6)
+        self.version_label = ctk.CTkLabel(self._scroll, text=f"v{__version__}", anchor="w")
+        self.version_label.grid(row=16, column=1, sticky="w", padx=12, pady=6)
         self.update_button = ctk.CTkButton(
-            self, text="Vérifier MAJ", width=100, command=self._check_for_updates
+            self._scroll, text="Vérifier MAJ", width=100, command=self._check_for_updates
         )
-        self.update_button.grid(row=15, column=2, sticky="e", padx=12, pady=6)
+        self.update_button.grid(row=16, column=2, sticky="e", padx=12, pady=6)
 
-        self.update_status_label = ctk.CTkLabel(self, text="", anchor="w")
-        self.update_status_label.grid(row=16, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
-
-        self.error_label = ctk.CTkLabel(self, text="", text_color="#ef4444", anchor="w")
-        self.error_label.grid(row=17, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
-
-        buttons = ctk.CTkFrame(self)
-        buttons.grid(row=18, column=0, columnspan=3, sticky="ew", padx=12, pady=12)
-        buttons.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkButton(buttons, text="Annuler", command=self._on_cancel).grid(
-            row=0, column=1, padx=(6, 0), pady=0
-        )
-        ctk.CTkButton(buttons, text="Enregistrer", command=self._on_save).grid(
-            row=0, column=2, padx=(6, 0), pady=0
-        )
+        self.update_status_label = ctk.CTkLabel(self._scroll, text="", anchor="w")
+        self.update_status_label.grid(row=17, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
 
         self.grab_set()
         self._camera_refreshing = False
@@ -275,24 +293,25 @@ class ConfigWindow(ctk.CTkToplevel):
         if not self.winfo_exists():
             return
 
-        frame = self._recorder.get_latest_frame()
+        frame = self._recorder.get_latest_raw_frame()
         if frame is not None:
             try:
                 brightness = int(self.brightness_var.get())
                 contrast = float(self.contrast_var.get())
                 roi_ratio = int(self.roi_var.get()) / 100.0
 
-                adjusted = cv2.convertScaleAbs(frame, alpha=contrast, beta=brightness)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if brightness != 0 or abs(contrast - 1.0) > 0.01:
+                    gray = cv2.convertScaleAbs(gray, alpha=contrast, beta=brightness)
 
-                h, w = adjusted.shape[:2]
+                h, w = gray.shape[:2]
                 roi_w = int(w * roi_ratio)
                 roi_h = int(h * roi_ratio)
                 x1 = (w - roi_w) // 2
                 y1 = (h - roi_h) // 2
-                cv2.rectangle(adjusted, (x1, y1), (x1 + roi_w, y1 + roi_h), (0, 255, 0), 2)
+                cv2.rectangle(gray, (x1, y1), (x1 + roi_w, y1 + roi_h), 255, 2)
 
-                rgb = cv2.cvtColor(adjusted, cv2.COLOR_BGR2RGB)
-                resized = cv2.resize(rgb, (560, 315))
+                resized = cv2.resize(gray, (560, 315))
                 img = Image.fromarray(resized)
                 photo = CTkImage(light_image=img, dark_image=img, size=(560, 315))
                 self._preview_photo = photo
@@ -349,6 +368,7 @@ class ConfigWindow(ctk.CTkToplevel):
             )
             if info.download_url:
                 self._pending_download_url = info.download_url
+                self._pending_sha256_url = info.sha256_url
                 self.update_button.configure(
                     state="normal",
                     text="Télécharger",
@@ -371,6 +391,7 @@ class ConfigWindow(ctk.CTkToplevel):
         url = getattr(self, "_pending_download_url", None)
         if not url:
             return
+        sha256_url = getattr(self, "_pending_sha256_url", None)
 
         self.update_button.configure(state="disabled", text="Téléchargement...")
         self.update_status_label.configure(text="Téléchargement en cours...", text_color="#9ca3af")
@@ -381,7 +402,7 @@ class ConfigWindow(ctk.CTkToplevel):
                 self.after(0, lambda p=percent: self._update_download_progress(p))
 
         def do_download() -> None:
-            success, result = download_update(url, progress_callback)
+            success, result = download_update(url, progress_callback, sha256_url=sha256_url)
             self.after(0, lambda: self._handle_download_result(success, result))
 
         threading.Thread(target=do_download, name="tmo_download_update", daemon=True).start()
@@ -428,6 +449,72 @@ class ConfigWindow(ctk.CTkToplevel):
                 text=f"Erreur: {error}", text_color="#ef4444"
             )
             self.update_button.configure(state="normal", text="Vérifier MAJ")
+
+    def _start_calibration(self) -> None:
+        if not self._recorder.qr_available:
+            self.calibration_label.configure(text="Scanner QR non disponible", text_color="#ef4444")
+            return
+        if self._recorder.qr_backend != "pyzbar":
+            self.calibration_label.configure(
+                text="Calibration disponible uniquement avec pyzbar", text_color="#f59e0b"
+            )
+            return
+
+        self.calibrate_button.configure(state="disabled", text="Capture...")
+        self.calibration_label.configure(text="Capture des frames en cours...", text_color="#9ca3af")
+        roi_ratio = int(self.roi_var.get()) / 100.0
+
+        def _work() -> None:
+            frames: list = []
+            for _ in range(30):
+                frame = self._recorder.get_latest_raw_frame()
+                if frame is not None:
+                    frames.append(frame)
+                time.sleep(0.05)
+
+            if not frames:
+                self.after(0, lambda: self._calibration_failed("Aucune frame capturée — caméra active ?"))
+                return
+
+            self.after(0, lambda n=len(frames): self.calibration_label.configure(
+                text=f"Analyse de {n} frames...", text_color="#9ca3af"
+            ))
+            self.after(0, lambda: self.calibrate_button.configure(text="Analyse..."))
+
+            def on_progress(p: int) -> None:
+                self.after(0, lambda pct=p: self.calibration_label.configure(
+                    text=f"Analyse... {pct}%", text_color="#9ca3af"
+                ))
+
+            b, c, score = self._recorder.calibrate_qr(frames, roi_ratio, on_progress)
+
+            if score == 0:
+                self.after(0, lambda: self._calibration_failed(
+                    "Aucun QR code détecté — cadrez un QR code et réessayez"
+                ))
+            else:
+                self.after(0, lambda: self._calibration_done(b, c, score, len(frames)))
+
+        threading.Thread(target=_work, name="tmo_calibrate", daemon=True).start()
+
+    def _calibration_failed(self, msg: str) -> None:
+        if not self.winfo_exists():
+            return
+        self.calibration_label.configure(text=msg, text_color="#ef4444")
+        self.calibrate_button.configure(state="normal", text="Calibrer")
+
+    def _calibration_done(self, brightness: int, contrast: float, score: int, total: int) -> None:
+        if not self.winfo_exists():
+            return
+        self.brightness_var.set(brightness)
+        self.contrast_var.set(contrast)
+        self._on_slider_change()
+        pct = int(score / total * 100)
+        self.calibration_label.configure(
+            text=f"Réglages optimaux trouvés — {pct}% de détection ({score}/{total} frames) — pensez à Enregistrer",
+            text_color="#10b981",
+        )
+        self.calibrate_button.configure(state="normal", text="Calibrer")
 
     def _refresh_cameras(self) -> None:
         self._refresh_cameras_async(max_index=20)
@@ -536,15 +623,18 @@ class ConfigWindow(ctk.CTkToplevel):
             self.error_label.configure(text="La durée max doit être >= 1 minute")
             return
 
+        site_url = self.site_entry.get().strip()
+        if site_url and not (site_url.startswith("https://") or site_url.startswith("http://")):
+            self.error_label.configure(text="L'URL du site doit commencer par https:// ou http://")
+            return
+
         cfg = AppConfig(
             camera_index=camera_index,
             camera_flip=self.flip_var.get().strip(),
             output_dir=self.output_entry.get().strip(),
             retention_days=retention_days,
             max_recording_minutes=max_recording_minutes,
-            api_url=self._initial_config.api_url,
-            site_url=self.site_entry.get().strip(),
-            api_key=self._initial_config.api_key,
+            site_url=site_url,
             scan_roi_percent=int(self.roi_var.get()),
             qr_brightness=int(self.brightness_var.get()),
             qr_contrast=round(float(self.contrast_var.get()), 2),
@@ -961,9 +1051,7 @@ class TmoApp(ctk.CTk):
 
         self.recorder = recorder
         self.config = config
-        self.api_url = config.api_url.strip() or None
         self.site_url = config.site_url.strip() or None
-        self.api_key = config.api_key.strip() or None
 
         self.title("TMO")
         self.geometry("1024x720")
@@ -1151,15 +1239,15 @@ class TmoApp(ctk.CTk):
             self._dismiss_dms_dialog()
             self._set_status(f"Enregistrement en cours : {ev.order_id}")
             self.update_idletasks()
-            self._send_status_async(ev.order_id, "video_started")
             self._open_order_modal(ev.order_id)
 
         elif ev.type == "recording_stopped" and ev.order_id:
             self._dismiss_dms_dialog()
             self._set_status(self._ready_status_text())
-            self._send_status_async(ev.order_id, "video_stopped")
 
         elif ev.type == "error":
+            msg = ev.message or "unknown"
+            log.error("recorder_error message=%s", msg)
             if ev.message:
                 self._set_status(f"Erreur : {ev.message}")
             else:
@@ -1182,23 +1270,6 @@ class TmoApp(ctk.CTk):
             return f"Prêt (QR: {backend})"
         return "Prêt"
 
-    def _send_status_async(self, order_id: str, status: str) -> None:
-        def _work() -> None:
-            ok, _ = send_status(
-                api_url=self.api_url,
-                site_url=self.site_url,
-                api_key=self.api_key,
-                order_id=order_id,
-                status=status,
-            )
-            if not ok:
-                self.after(0, self._handle_network_error)
-
-        threading.Thread(target=_work, name="tmo_network", daemon=True).start()
-
-    def _handle_network_error(self) -> None:
-        self._set_status("Erreur Réseau")
-        self.after(2000, self._restore_recording_status)
 
     def _restore_recording_status(self) -> None:
         order_id = self.recorder.recording_order_id
@@ -1293,9 +1364,7 @@ class TmoApp(ctk.CTk):
         save_config(cfg)
 
         self.config = cfg
-        self.api_url = cfg.api_url.strip() or None
         self.site_url = cfg.site_url.strip() or None
-        self.api_key = cfg.api_key.strip() or None
 
         output_dir = resolve_output_dir(cfg)
         ensure_dir(output_dir)
@@ -1361,6 +1430,43 @@ class TmoApp(ctk.CTk):
         threading.Thread(target=_open_browser, name="tmo_browser", daemon=True).start()
 
 
+def _show_config_error_notice(parent: ctk.CTk, message: str) -> None:
+    """Show a dialog when config.json is corrupted and defaults were used."""
+    dialog = ctk.CTkToplevel(parent)
+    dialog.title("Erreur de configuration")
+    dialog.geometry("480x220")
+    dialog.resizable(False, False)
+    dialog.grab_set()
+
+    try:
+        dialog.attributes("-topmost", True)
+    except Exception:
+        pass
+
+    dialog.grid_columnconfigure(0, weight=1)
+
+    ctk.CTkLabel(
+        dialog,
+        text="⚠️ Fichier de configuration corrompu",
+        font=("Arial", 16, "bold"),
+    ).grid(row=0, column=0, padx=20, pady=(20, 10))
+
+    ctk.CTkLabel(
+        dialog,
+        text=message,
+        justify="left",
+        wraplength=440,
+    ).grid(row=1, column=0, padx=20, pady=10)
+
+    ctk.CTkButton(
+        dialog,
+        text="Compris",
+        command=dialog.destroy,
+    ).grid(row=2, column=0, padx=20, pady=(10, 20))
+
+    dialog.lift()
+
+
 def _show_extension_reload_notice(parent: ctk.CTk) -> None:
     """Show a dialog reminding user to reload the Chrome extension after update."""
     dialog = ctk.CTkToplevel(parent)
@@ -1400,6 +1506,8 @@ def _show_extension_reload_notice(parent: ctk.CTk) -> None:
 
 
 def main() -> None:
+    setup_logging(log_path())
+
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
 
@@ -1407,7 +1515,9 @@ def main() -> None:
     just_updated = check_if_just_updated(__version__)
     set_last_run_version(__version__)
 
-    cfg = load_config()
+    log.info("app_started version=%s", __version__)
+
+    cfg, config_error = load_config()
     output_dir = resolve_output_dir(cfg)
 
     ensure_dir(output_dir)
@@ -1425,11 +1535,17 @@ def main() -> None:
 
     app = TmoApp(recorder=recorder, config=cfg)
 
+    # Show config error notice if config.json was corrupted
+    if config_error:
+        log.warning("config_corrupted: %s", config_error)
+        app.after(300, lambda: _show_config_error_notice(app, config_error))
+
     # Show extension reload notice after update
     if just_updated:
         app.after(500, lambda: _show_extension_reload_notice(app))
 
     app.mainloop()
+    log.info("app_stopped")
 
 
 if __name__ == "__main__":

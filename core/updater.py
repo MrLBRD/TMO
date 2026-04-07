@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
 import re
 import subprocess
@@ -9,9 +11,12 @@ import sys
 import tempfile
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import requests
+
+log = logging.getLogger(__name__)
 
 GITHUB_REPO = "MrLBRD/TMO"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -26,6 +31,7 @@ class UpdateInfo:
     current_version: str
     latest_version: str | None = None
     download_url: str | None = None
+    sha256_url: str | None = None
     release_notes: str | None = None
     error: str | None = None
 
@@ -82,43 +88,56 @@ def check_for_updates(current_version: str, timeout: float = 5.0) -> UpdateInfo:
                 error="Version non trouvée dans la release",
             )
 
-        # Find the installer asset
+        # Find the installer and SHA256 assets
         download_url = None
+        sha256_url = None
+        sha256_asset_name = (INSTALLER_ASSET_NAME + ".sha256").lower()
         for asset in data.get("assets", []):
-            if asset.get("name", "").lower() == INSTALLER_ASSET_NAME.lower():
+            name = asset.get("name", "").lower()
+            if name == INSTALLER_ASSET_NAME.lower():
                 download_url = asset.get("browser_download_url")
-                break
+            elif name == sha256_asset_name:
+                sha256_url = asset.get("browser_download_url")
 
         # Check if update is available
         update_available = is_newer_version(current_version, latest_version)
 
+        log.info(
+            "update_check current=%s latest=%s available=%s",
+            current_version, latest_version, update_available,
+        )
         return UpdateInfo(
             available=update_available,
             current_version=current_version,
             latest_version=latest_version,
             download_url=download_url,
+            sha256_url=sha256_url,
             release_notes=data.get("body"),
         )
 
     except requests.exceptions.Timeout:
+        log.warning("update_check_failed error=timeout")
         return UpdateInfo(
             available=False,
             current_version=current_version,
             error="Délai d'attente dépassé",
         )
     except requests.exceptions.ConnectionError:
+        log.warning("update_check_failed error=connection_error")
         return UpdateInfo(
             available=False,
             current_version=current_version,
             error="Impossible de se connecter à GitHub",
         )
     except requests.exceptions.RequestException as e:
+        log.warning("update_check_failed error=%s", e)
         return UpdateInfo(
             available=False,
             current_version=current_version,
             error=f"Erreur réseau: {e}",
         )
     except Exception as e:
+        log.error("update_check_error error=%s", e)
         return UpdateInfo(
             available=False,
             current_version=current_version,
@@ -130,6 +149,7 @@ def download_update(
     download_url: str,
     progress_callback: Callable[[int, int], None] | None = None,
     timeout: float = 60.0,
+    sha256_url: str | None = None,
 ) -> tuple[bool, str]:
     """
     Download the update installer.
@@ -161,17 +181,45 @@ def download_update(
                     if progress_callback:
                         progress_callback(downloaded, total_size)
 
+        if sha256_url:
+            try:
+                sha256_response = requests.get(sha256_url, timeout=10)
+                sha256_response.raise_for_status()
+                expected_hash = sha256_response.text.strip().split()[0].lower()
+            except Exception as e:
+                log.error("update_sha256_fetch_failed error=%s", e)
+                try:
+                    os.unlink(installer_path)
+                except OSError:
+                    pass
+                return False, f"Impossible de récupérer le hash de vérification : {e}"
+
+            actual_hash = hashlib.sha256(Path(installer_path).read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                log.error("update_integrity_failed expected=%s actual=%s", expected_hash, actual_hash)
+                try:
+                    os.unlink(installer_path)
+                except OSError:
+                    pass
+                return False, "Vérification d'intégrité échouée — installateur potentiellement altéré"
+
+        log.info("update_download_complete path=%s bytes=%d", installer_path, downloaded)
         return True, installer_path
 
     except requests.exceptions.Timeout:
+        log.warning("update_download_failed error=timeout")
         return False, "Délai d'attente dépassé lors du téléchargement"
     except requests.exceptions.ConnectionError:
+        log.warning("update_download_failed error=connection_error")
         return False, "Connexion perdue pendant le téléchargement"
     except requests.exceptions.RequestException as e:
+        log.warning("update_download_failed error=%s", e)
         return False, f"Erreur de téléchargement: {e}"
     except OSError as e:
+        log.error("update_download_write_error error=%s", e)
         return False, f"Erreur d'écriture: {e}"
     except Exception as e:
+        log.error("update_download_error error=%s", e)
         return False, f"Erreur: {e}"
 
 

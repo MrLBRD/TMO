@@ -81,18 +81,21 @@ async function cleanupTabs() {
 }
 
 // Tracker quand une tab TMO est créée
-chrome.tabs.onCreated.addListener((tab) => {
+// Note: la permission "tabs" (et non "activeTab") est requise car getTrackedTabs()
+// appelle chrome.tabs.query({}) pour retrouver TOUTES les tabs trackées, pas seulement
+// la tab active. L'extension doit fermer les anciennes tabs, pas la tab courante.
+chrome.tabs.onCreated.addListener(async (tab) => {
   if (tab.url && isTmoOpenUrl(tab.url)) {
-    trackTab(tab.id);
-    setTimeout(cleanupTabs, 800);
+    await trackTab(tab.id);
+    await cleanupTabs();
   }
 });
 
 // Tracker quand une tab est mise à jour avec orderCheck
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.url && isTmoOpenUrl(changeInfo.url)) {
-    trackTab(tabId);
-    setTimeout(cleanupTabs, 800);
+    await trackTab(tabId);
+    await cleanupTabs();
   }
 });
 

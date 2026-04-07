@@ -16,9 +16,7 @@ class AppConfig:
     output_dir: str = ""
     retention_days: int = 45
     max_recording_minutes: int = 15
-    api_url: str = ""
     site_url: str = ""
-    api_key: str = ""
     scan_roi_percent: int = 90
     qr_brightness: int = 0
     qr_contrast: float = 1.0
@@ -42,6 +40,10 @@ def _config_dir() -> Path:
 
 def config_path() -> Path:
     return _config_dir() / "config.json"
+
+
+def log_path() -> Path:
+    return _config_dir() / "tmo.log"
 
 
 def resolve_output_dir(config: AppConfig) -> Path:
@@ -88,17 +90,9 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         except ValueError:
             pass
 
-    api_url = os.environ.get("TMO_API_URL")
-    if api_url is not None and api_url.strip() != "":
-        cfg.api_url = api_url
-
     site_url = os.environ.get("TMO_SITE_URL")
     if site_url is not None and site_url.strip() != "":
         cfg.site_url = site_url
-
-    api_key = os.environ.get("TMO_API_KEY")
-    if api_key is not None and api_key.strip() != "":
-        cfg.api_key = api_key
 
     scan_roi_percent = os.environ.get("TMO_SCAN_ROI_PERCENT")
     if scan_roi_percent is not None and scan_roi_percent.strip() != "":
@@ -124,9 +118,10 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
     return cfg
 
 
-def load_config() -> AppConfig:
+def load_config() -> tuple[AppConfig, str | None]:
     cfg = AppConfig()
     path = config_path()
+    error: str | None = None
 
     if path.exists():
         try:
@@ -157,19 +152,9 @@ def load_config() -> AppConfig:
                         cfg.max_recording_minutes = int(data["max_recording_minutes"])
                     except Exception:
                         pass
-                if "api_url" in data:
-                    try:
-                        cfg.api_url = str(data["api_url"])
-                    except Exception:
-                        pass
                 if "site_url" in data:
                     try:
                         cfg.site_url = str(data["site_url"])
-                    except Exception:
-                        pass
-                if "api_key" in data:
-                    try:
-                        cfg.api_key = str(data["api_key"])
                     except Exception:
                         pass
                 if "scan_roi_percent" in data:
@@ -187,10 +172,14 @@ def load_config() -> AppConfig:
                         cfg.qr_contrast = max(0.5, min(3.0, float(data["qr_contrast"])))
                     except Exception:
                         pass
-        except Exception:
-            pass
+        except Exception as e:
+            error = (
+                f"Le fichier config.json est corrompu et a été ignoré.\n"
+                f"La configuration a été réinitialisée aux valeurs par défaut.\n\n"
+                f"Détail : {e}"
+            )
 
-    return _apply_env_overrides(cfg)
+    return _apply_env_overrides(cfg), error
 
 
 def save_config(cfg: AppConfig) -> Path:

@@ -1,145 +1,136 @@
-# 🏉 TMO : Television Match Official
+# TMO : Television Match Official
 
-**Système de vidéo-vérification pour la préparation de commandes de rugby.**
+**Système d'enregistrement vidéo automatique pour la préparation de commandes e-commerce (rugby).**
 
-Ce projet permet d'automatiser l'enregistrement vidéo de chaque colis via une webcam Logitech C270, déclenché par la lecture d'un QR code, avec une gestion intelligente du stockage et une interface de contrôle moderne.
+Un opérateur scanne le QR code d'un ticket de commande avec une webcam. L'app démarre un enregistrement MP4 horodaté et ouvre la page de commande dans Chrome. Une extension Chrome ferme automatiquement les anciens onglets.
 
------
+---
 
-## 📋 Spécifications Techniques
+## Spécifications Techniques
 
-  * **Langage :** Python 3.10+
-  * **Plateforme cible :** Windows (Développement sur Mac possible)
-  * **Matériel :** Webcam Logitech C270 (fixée au-dessus de la table)
-  * **Trigger :** QR Code (10 caractères)
-  * **Flux Web :** Communication via HTTP (Poll/Webhook)
-  * **Rétention :** Auto-suppression des rushs après 45 jours.
+- **Langage :** Python 3.10+
+- **Plateforme cible :** Windows (développement sur Mac possible)
+- **Matériel :** Webcam Logitech C270 (fixée au-dessus de la table)
+- **Trigger :** QR Code format `Tk-{ORDER_ID}` (5-10 caractères alphanumériques)
+- **Rétention :** Auto-suppression des vidéos après 45 jours (configurable)
 
------
+---
 
-## 🛠️ Pile Logicielle (Libraries)
+## Pile Logicielle
 
 | Bibliothèque | Usage |
 | :--- | :--- |
-| `opencv-python` | Capture vidéo, enregistrement MP4 et traitement d'image. |
-| `pyzbar` | Décodage ultra-rapide des QR Codes. |
-| `customtkinter` | Interface graphique (GUI) moderne et responsive. |
-| `requests` | Envoi des statuts au site web de gestion. |
-| `pathlib` / `os` | Gestion des fichiers et rotation des 45 jours. |
-| `threading` | Gestion du scan QR et de l'encodage sans figer l'interface. |
+| `opencv-python` | Capture webcam, encodage MP4, détection QR (fallback) |
+| `pyzbar` | Décodage QR rapide (bibliothèque C) |
+| `customtkinter` | Interface graphique moderne dark mode |
+| `pillow` | Conversion frames pour affichage tkinter |
+| `threading` | Capture, encodage et UI découplés |
 
------
+---
 
-## 📂 Structure du Projet
+## Structure du Projet
 
 ```text
-TMO_PROJECT/
-├── main.py              # Point d'entrée, interface CustomTkinter
+TMO/
+├── main.py                  # Point d'entrée — GUI, event loop, threads
 ├── core/
-│   ├── recorder.py      # Logique de capture vidéo et scan QR
-│   ├── network.py       # Fonctions d'envoi HTTP (API/Poll)
-│   └── storage.py       # Gestion des fichiers et nettoyage (45j)
-├── output/              # Dossier de stockage des vidéos (.mp4)
-├── resources/           # Icônes ou sons (bip de scan)
-├── requirements.txt     # Liste des dépendances
-└── build_win.py         # Script pour générer l'exécutable Windows
+│   ├── recorder.py          # Capture vidéo (OpenCV), détection QR (pyzbar), écriture MP4
+│   ├── storage.py           # Chemins, nettoyage rétention, espace disque
+│   ├── config.py            # Chargement/sauvegarde config JSON
+│   ├── logging_setup.py     # RotatingFileHandler (1 MB × 3 backups)
+│   └── updater.py           # Auto-update via GitHub Releases + vérification SHA256
+├── chrome_extension/
+│   ├── background.js        # Service worker MV3 — ferme les anciens onglets TMO
+│   └── manifest.json        # Permissions tabs, storage, alarms
+├── .github/
+│   ├── workflows/
+│   │   └── build-windows.yml  # CI/CD : build PyInstaller + release GitHub
+│   └── dependabot.yml         # Mise à jour automatique des actions GitHub
+├── TMO.spec                 # Configuration PyInstaller
+├── installer.iss            # Configuration Inno Setup
+├── build_win.py             # Script de build Windows
+├── requirements.txt         # Dépendances Python (versions épinglées)
+└── output/                  # Vidéos enregistrées (gitignore)
 ```
 
------
+---
 
-## ⚙️ Éléments à Développer
+## Workflow Opérationnel
 
-### 1\. Module de Vision (Recorder)
+1. **Démarrage :** L'opérateur lance `TMO.exe`. L'app vérifie l'espace disque et nettoie les vieux fichiers.
+2. **Attente :** La caméra affiche le flux en direct. Le scanner cherche un QR code dans la zone centrale.
+3. **Scan :** L'opérateur passe le bon de commande sous la caméra.
+   - Bip sonore + début de l'enregistrement + ouverture Chrome sur la page de commande.
+4. **Préparation :** L'opérateur prépare la commande devant la caméra.
+5. **Clôture :**
+   - Scan du QR code suivant → arrêt auto + démarrage du nouvel enregistrement.
+   - Ou clic STOP (fin de journée / pause).
 
-  * **Scan Sélectif :** Configurer `pyzbar` pour ignorer les EAN/Gencodes et ne lire que les QR codes de 10 caractères.
-  * **Buffer Vidéo :** Maintenir un flux constant pour l'affichage tout en compressant le fichier en arrière-plan.
-  * **Indicateur visuel :** Superposer un cercle rouge "REC" sur le flux vidéo quand l'enregistrement est actif.
+---
 
-### 2\. Interface Utilisateur (GUI)
+## Configuration
 
-  * **Fenêtre principale :** Vue en direct de la webcam.
-  * **Barre d'état :** Affiche "Prêt", "Enregistrement en cours : [ID\_COMMANDE]" ou "Erreur Réseau".
-  * **Bouton Manuel :** Un gros bouton "STOP" pour arrêter l'enregistrement si le scan automatique du colis suivant n'est pas utilisé.
+Fichier : `%APPDATA%\TMO\config.json` (Windows) / `~/.config/TMO/config.json` (Linux/Mac)
 
-### 3\. Logique de Stockage (Storage)
+| Clé | Défaut | Description |
+| :--- | :--- | :--- |
+| `camera_index` | `0` | Index caméra OpenCV |
+| `camera_flip` | `"none"` | `none` / `horizontal` / `vertical` / `both` |
+| `output_dir` | `~/TMO/output/` | Dossier de sortie vidéos |
+| `retention_days` | `45` | Rétention vidéos (jours) |
+| `max_recording_minutes` | `15` | Dead man's switch (0 = désactivé) |
+| `site_url` | `""` | URL WooCommerce (doit commencer par `https://`) |
+| `scan_roi_percent` | `90` | Zone de scan QR (% de la frame, centré) |
+| `qr_brightness` | `0` | Ajustement luminosité pour détection QR (-100 à +100) |
+| `qr_contrast` | `1.0` | Ajustement contraste pour détection QR (0.5 à 3.0) |
 
-  * **Nommage :** `YYYY-MM-DD_ID-COMMANDE.mp4`.
-  * **Fonction `clean_old_videos()` :** \* S'exécute à chaque démarrage.
-      * Calcule $date\_actuelle - 45\_jours$.
-      * Supprime récursivement les fichiers obsolètes.
+Toutes les clés sont surchargeables par variables d'environnement `TMO_*`.
 
-### 4\. Communication Web (Network)
+---
 
-  * **HTTP Post :** Dès qu'un scan est validé, envoyer un JSON : `{"order_id": "ABC1234567", "timestamp": "...", "status": "video_started"}`.
+## Développement local
 
------
+```bash
+python3 -m venv .venv
+source .venv/bin/activate       # Windows : .venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
 
-## 🚀 Workflow Opérationnel
+---
 
-1.  **Démarrage :** L'opérateur lance `TMO.exe`. Le système vérifie l'espace disque et nettoie les vieux fichiers.
-2.  **Attente :** La caméra affiche le flux en direct. L'algorithme cherche un QR Code dans la zone centrale.
-3.  **Scan :** L'opérateur passe le bon de commande sous la caméra.
-      * *Action :* Bip sonore + Début de l'enregistrement + Envoi info au site web.
-4.  **Préparation :** L'opérateur prépare les crampons/protections devant la caméra.
-5.  **Clôture :** \* Soit l'opérateur scanne le QR code de la **commande suivante** (Arrêt du précédent + Start du nouveau).
-      * Soit l'opérateur clique sur "STOP" (Fin de journée ou pause).
+## Publier une nouvelle version (release)
 
------
+Trois fichiers doivent toujours être synchronisés :
 
-## 📦 Déploiement (Mac vers Windows)
+| Fichier | Variable |
+| :--- | :--- |
+| `main.py` | `__version__ = "X.Y.Z"` |
+| `installer.iss` | `#define MyAppVersion "X.Y.Z"` |
+| `chrome_extension/manifest.json` | `"version": "X.Y.Z"` |
 
-Pour transformer ce projet en exécutable Windows depuis votre environnement :
+```bash
+git commit -m "chore: bump version to X.Y.Z"
+git tag vX.Y.Z
+git push origin main && git push origin vX.Y.Z
+```
 
-1.  **Environnement :** Utiliser un `venv` Python.
-2.  **Compilation :** Utiliser `PyInstaller`.
-    ```bash
-    pyinstaller --noconsole --onefile --add-data "resources;resources" main.py
-    ```
-3.  **Note Windows :** Assurez-vous d'installer les "Visual C++ Redistributable" sur le PC cible pour que `pyzbar` (librairie C) fonctionne.
+GitHub Actions détecte le tag `v*` → build PyInstaller + Inno Setup → release GitHub avec `TMO_Setup.exe` et `TMO_Setup.exe.sha256`.
 
------
+### Mise à jour in-app
 
-## 🔄 Publier une nouvelle version (release)
+1. Clic **"Vérifier MAJ"** dans la fenêtre Configuration → interroge l'API GitHub Releases
+2. Si version distante > `__version__` → bouton de téléchargement
+3. `TMO_Setup.exe` téléchargé dans le dossier temp, **SHA256 vérifié** avant exécution
+4. L'installateur se lance en processus détaché — l'app se ferme
+5. Au prochain démarrage, notification "mise à jour effectuée"
 
-### Étapes
+> La release GitHub **doit** contenir un asset nommé `TMO_Setup.exe` et un asset `TMO_Setup.exe.sha256`.
 
-1. **Mettre à jour le numéro de version** dans les 3 fichiers suivants :
+---
 
-   | Fichier | Variable |
-   | :--- | :--- |
-   | `main.py` | `__version__ = "X.Y.Z"` |
-   | `installer.iss` | `#define MyAppVersion "X.Y.Z"` |
-   | `chrome_extension/manifest.json` | `"version": "X.Y.Z"` |
+## Conseils pour la Logitech C270
 
-2. **Commiter et pousser un tag** `vX.Y.Z` :
-   ```bash
-   git add main.py installer.iss chrome_extension/manifest.json
-   git commit -m "chore: bump version to X.Y.Z"
-   git tag vX.Y.Z
-   git push origin main
-   git push origin vX.Y.Z
-   ```
-
-3. **GitHub Actions** détecte le tag `v*` → lance le workflow `Build TMO Windows` :
-   - Build PyInstaller (`TMO.spec`)
-   - Build installateur Inno Setup (`installer.iss`) → `TMO_Setup.exe`
-   - Crée automatiquement une release GitHub avec `TMO_Setup.exe` en asset
-
-### Mécanisme de mise à jour in-app
-
-L'application intègre un système de MAJ automatique (`core/updater.py`) :
-
-1. Au clic sur **"Vérifier MAJ"** (fenêtre Configuration), l'app interroge l'API GitHub : `GET /repos/MrLBRD/TMO/releases/latest`
-2. Si la version du tag distant est supérieure à `__version__`, le bouton de téléchargement apparaît
-3. `TMO_Setup.exe` est téléchargé dans le dossier temp système
-4. L'installateur est lancé en **processus détaché** — l'app se ferme, l'installateur tourne seul
-5. Au prochain démarrage, l'app détecte qu'elle vient d'être mise à jour et affiche une notification
-
-> **Note :** La release GitHub **doit** contenir un asset nommé exactement `TMO_Setup.exe`, c'est le nom attendu par `updater.py` (`INSTALLER_ASSET_NAME`).
-
------
-
-## 💡 Conseils pour la Logitech C270
-
-  * **Lumière :** La C270 gère mal les faibles luminosités. Prévoyez un éclairage direct sur la table pour éviter le grain sur la vidéo (ce qui gêne la lecture du QR code).
-  * **Focus :** Si le QR code est flou, il faudra peut-être ouvrir la webcam (vis sous l'autocollant) pour régler manuellement la bague de mise au point, car elle est réglée d'usine pour l'infini (visage).
+- **Lumière :** La C270 gère mal les faibles luminosités. Prévoyez un éclairage direct sur la table.
+- **Focus :** Si le QR code est flou, réglez manuellement la bague de mise au point (vis sous l'autocollant) — réglée d'usine pour l'infini.
+- **Calibration QR :** Dans Configuration, l'aperçu est affiché en niveaux de gris (image exacte analysée par le scanner). Utilisez le bouton **Calibrer** pour trouver automatiquement les meilleurs réglages brightness/contrast en pointant la caméra sur un QR code immobile.

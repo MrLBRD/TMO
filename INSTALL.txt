@@ -1,9 +1,9 @@
 ═══════════════════════════════════════════════════════════════
   TMO - Television Match Official
-  Installation et Configuration
+  Installation et Configuration — v1.2.0
 ═══════════════════════════════════════════════════════════════
 
-📋 PRÉREQUIS
+PRÉREQUIS
 ───────────────────────────────────────────────────────────────
 • Windows 10 ou supérieur
 • Webcam Logitech C270 (ou compatible)
@@ -12,24 +12,22 @@
   → https://aka.ms/vs/17/release/vc_redist.x64.exe
 
 
-🚀 INSTALLATION
+INSTALLATION
 ───────────────────────────────────────────────────────────────
 
-1. Copiez TMO.exe où vous voulez (Bureau, Documents, etc.)
+1. Lancez TMO_Setup.exe et suivez les étapes
 
-2. Double-cliquez sur TMO.exe pour lancer
-
-3. Au premier lancement :
+2. Au premier lancement :
    - Cliquez sur CONFIG
    - Vérifiez la caméra détectée
-   - Configurez l'URL du site web
+   - Renseignez l'URL du site WooCommerce (https://...)
    - Enregistrez
 
 
-🔧 CONFIGURATION DE L'EXTENSION CHROME
+CONFIGURATION DE L'EXTENSION CHROME
 ───────────────────────────────────────────────────────────────
 
-Cette extension ferme automatiquement les anciens onglets.
+Cette extension ferme automatiquement les anciens onglets TMO.
 
 1. Ouvrez Chrome
 
@@ -39,27 +37,31 @@ Cette extension ferme automatiquement les anciens onglets.
 
 4. Cliquez "Charger l'extension non empaquetée"
 
-5. Sélectionnez le dossier "chrome_extension"
+5. Sélectionnez le dossier "chrome_extension" dans le dossier
+   d'installation de TMO
 
 6. L'extension est installée !
 
 Raccourci clavier : Alt+Shift+L pour nettoyer manuellement
 
+Note : après une mise à jour de TMO, rechargez l'extension dans
+chrome://extensions/ (bouton de rechargement).
 
-📹 UTILISATION
+
+UTILISATION
 ───────────────────────────────────────────────────────────────
 
 DÉMARRER UN ENREGISTREMENT :
-• Scannez le QR code de la commande
+• Scannez le QR code de la commande sous la caméra
   OU
 • Entrez l'ID manuellement et cliquez START
 
-L'overlay (petite fenêtre) indique l'état :
-• Gris "PRÊT" = En attente
+L'overlay (petite fenêtre flottante) indique l'état :
+• Gris "PRÊT" = En attente de scan
 • Rouge "REC" + ID = Enregistrement en cours
 
 ARRÊTER :
-• Scannez le QR de la commande suivante (auto-stop)
+• Scannez le QR de la commande suivante (arrêt + nouveau départ auto)
   OU
 • Cliquez STOP dans la fenêtre principale
 
@@ -67,27 +69,51 @@ DÉPLACER L'OVERLAY :
 • Maintenez Ctrl + Clic et glissez
 
 
-📁 STOCKAGE
+CALIBRATION DU SCANNER QR
+───────────────────────────────────────────────────────────────
+
+Si les QR codes sont mal détectés (éclairage difficile, caméra
+ancienne), utilisez la calibration automatique :
+
+1. Ouvrez CONFIG
+2. Cadrez un QR code immobile dans l'aperçu (niveaux de gris)
+3. Cliquez "Calibrer"
+4. L'app teste automatiquement les meilleurs réglages
+   brightness/contrast et met à jour les sliders
+5. Cliquez Enregistrer
+
+L'aperçu est affiché en niveaux de gris — c'est l'image exacte
+que le scanner analyse, ce qui permet un ajustement précis.
+
+
+STOCKAGE
 ───────────────────────────────────────────────────────────────
 
 Les vidéos sont sauvegardées dans :
-  %USERPROFILE%\Documents\TMO\output\
+  %USERPROFILE%\TMO\output\
 
-Format : YYYY-MM-DD_ID-COMMANDE.mp4
+Format : YYYY/MM/DD/{ORDER_ID}.mp4
 
-Rétention : 45 jours (configurable)
+Rétention : 45 jours (configurable dans CONFIG)
+
+Espace disque :
+• Alerte orange : moins de 10 Go disponibles
+• Alerte rouge   : moins de 2 Go disponibles
 
 
-⚙️ CONFIGURATION
+CONFIGURATION AVANCÉE
 ───────────────────────────────────────────────────────────────
 
 Fichier de config :
   %APPDATA%\TMO\config.json
 
-Pour réinitialiser : Supprimez ce fichier
+Pour réinitialiser : supprimez ce fichier
+
+Logs de l'application :
+  %APPDATA%\TMO\tmo.log
 
 
-🆘 DÉPANNAGE
+DÉPANNAGE
 ───────────────────────────────────────────────────────────────
 
 PROBLÈME : Caméra non détectée
@@ -98,7 +124,8 @@ PROBLÈME : Caméra non détectée
 PROBLÈME : QR code non scanné
 → Vérifiez l'éclairage (important pour C270)
 → Nettoyez la lentille de la webcam
-→ Rapprochez le QR code de la caméra
+→ Utilisez la calibration automatique (voir section ci-dessus)
+→ Réduisez la zone de scan dans CONFIG (slider "Zone scan")
 
 PROBLÈME : Chrome ne s'ouvre pas
 → Vérifiez dans CONFIG que Chrome est détecté
@@ -109,15 +136,6 @@ PROBLÈME : Extension ne fonctionne pas
 → Rechargez l'extension dans chrome://extensions/
 
 
-📞 SUPPORT
-───────────────────────────────────────────────────────────────
-
-Pour toute question ou problème :
-→ Consultez le README.md
-→ GitHub Issues : https://github.com/anthropics/claude-code/issues
-
-
 ═══════════════════════════════════════════════════════════════
-  Développé avec Claude Code
-  Version 1.0 - 2026
+  Développé avec Claude Code — v1.2.0 — 2026
 ═══════════════════════════════════════════════════════════════

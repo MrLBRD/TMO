@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+import logging
 import os
 import queue
 import threading
@@ -11,6 +13,8 @@ import time
 
 import cv2
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 try:
     from pyzbar.pyzbar import decode as zbar_decode
@@ -20,6 +24,8 @@ except Exception:
     ZBarSymbol = None
 
 from .storage import build_video_path, default_output_dir, ensure_dir, is_valid_order_id, sanitize_order_id
+
+_QR_ERROR_THRESHOLD = 10  # Consecutive decode exceptions before disabling QR
 
 
 @dataclass(frozen=True)
@@ -140,6 +146,7 @@ class Recorder:
 
         self._latest_frame_lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
+        self._latest_raw_frame: np.ndarray | None = None
 
         self._fps: float = 30.0
         self._frame_size: tuple[int, int] | None = None
@@ -183,6 +190,8 @@ class Recorder:
             self._qr_backend = None
 
         self._qr_available = self._qr_backend is not None
+        self._qr_error_count: int = 0
+        self._camera_read_fail_last_log: float = 0.0
 
     @property
     def qr_available(self) -> bool:
@@ -207,6 +216,12 @@ class Recorder:
             if self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
+
+    def get_latest_raw_frame(self) -> np.ndarray | None:
+        with self._latest_frame_lock:
+            if self._latest_raw_frame is None:
+                return None
+            return self._latest_raw_frame.copy()
 
     def pause_qr(self, paused: bool) -> None:
         self._qr_paused = paused
@@ -234,8 +249,14 @@ class Recorder:
         else:
             cap = cv2.VideoCapture(self.camera_index)
         if not cap.isOpened():
+            log.error("camera_open_failed index=%d", self.camera_index)
             self.events.put(RecorderEvent(type="error", message="camera_open_failed"))
             return
+
+        # Drain initial frames — Windows cameras often return black frames during init
+        if os.name == "nt":
+            for _ in range(5):
+                cap.read()
 
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps and fps > 1:
@@ -293,6 +314,7 @@ class Recorder:
             t.join(timeout=5)
 
         if order_id:
+            log.info("recording_stopped order_id=%s path=%s", order_id, path)
             self.events.put(
                 RecorderEvent(
                     type="recording_stopped",
@@ -344,6 +366,7 @@ class Recorder:
         t.start()
         self._beep()
 
+        log.info("recording_started order_id=%s path=%s", safe_id, path)
         self.events.put(
             RecorderEvent(type="recording_started", order_id=safe_id, message=str(path))
         )
@@ -356,6 +379,10 @@ class Recorder:
         while not self._stop_event.is_set():
             ok, frame = cap.read()
             if not ok:
+                now = time.time()
+                if now - self._camera_read_fail_last_log >= 5.0:
+                    log.warning("camera_read_failed index=%d", self.camera_index)
+                    self._camera_read_fail_last_log = now
                 self.events.put(RecorderEvent(type="error", message="camera_read_failed"))
                 time.sleep(0.2)
                 continue
@@ -375,6 +402,7 @@ class Recorder:
 
             with self._latest_frame_lock:
                 self._latest_frame = display_frame
+                self._latest_raw_frame = frame
 
             self._enqueue_recording_frame(frame)
 
@@ -453,10 +481,15 @@ class Recorder:
                     results = zbar_decode(gray, symbols=[ZBarSymbol.QRCODE])
                 else:
                     results = zbar_decode(gray)
+                self._qr_error_count = 0
             except Exception:
+                self._qr_error_count += 1
                 if self._opencv_qr_detector is not None:
+                    log.warning("qr_backend_switch from=pyzbar to=opencv")
                     self._qr_backend = "opencv"
-                else:
+                    self._qr_error_count = 0
+                elif self._qr_error_count >= _QR_ERROR_THRESHOLD:
+                    log.error("qr_disabled backend=pyzbar after %d errors", self._qr_error_count)
                     self._qr_available = False
                 self.events.put(RecorderEvent(type="error", message="qr_decoder_failed"))
                 return
@@ -502,8 +535,12 @@ class Recorder:
                     data, _points, _ = detector.detectAndDecode(roi)
                     if data:
                         candidates = [data]
+                self._qr_error_count = 0
             except Exception:
-                self._qr_available = False
+                self._qr_error_count += 1
+                if self._qr_error_count >= _QR_ERROR_THRESHOLD:
+                    log.error("qr_disabled backend=opencv after %d errors", self._qr_error_count)
+                    self._qr_available = False
                 self.events.put(RecorderEvent(type="error", message="qr_opencv_failed"))
                 return
 
@@ -740,6 +777,73 @@ class Recorder:
                     _ = q.get_nowait()
                 except queue.Empty:
                     return
+
+    def calibrate_qr(
+        self,
+        frames: list[np.ndarray],
+        roi_ratio: float,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> tuple[int, float, int]:
+        """Grid-search brightness/contrast for best pyzbar detection rate.
+
+        Returns (best_brightness, best_contrast, best_score) where best_score
+        is the number of frames (out of len(frames)) where the QR was decoded.
+        Returns (0, 1.0, 0) if pyzbar is unavailable or no detections found.
+        """
+        if not frames or not self._qr_available or zbar_decode is None:
+            return 0, 1.0, 0
+
+        brightness_values = [-50, -25, 0, 25, 50]
+        contrast_values = [0.5, 0.75, 1.0, 1.5, 2.0, 2.5]
+        total_combos = len(brightness_values) * len(contrast_values)
+        tested = 0
+
+        best_score = -1
+        best_brightness = 0
+        best_contrast = 1.0
+
+        for contrast in contrast_values:
+            for brightness in brightness_values:
+                score = 0
+                for frame in frames:
+                    h, w = frame.shape[:2]
+                    roi_w = int(w * roi_ratio)
+                    roi_h = int(h * roi_ratio)
+                    x1 = max(0, (w - roi_w) // 2)
+                    y1 = max(0, (h - roi_h) // 2)
+                    roi = frame[y1:y1 + roi_h, x1:x1 + roi_w]
+                    try:
+                        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                        if brightness != 0 or abs(contrast - 1.0) > 0.01:
+                            gray = cv2.convertScaleAbs(gray, alpha=contrast, beta=brightness)
+                    except Exception:
+                        continue
+                    try:
+                        if ZBarSymbol is not None:
+                            results = zbar_decode(gray, symbols=[ZBarSymbol.QRCODE])
+                        else:
+                            results = zbar_decode(gray)
+                        if results:
+                            score += 1
+                    except Exception:
+                        pass
+
+                tested += 1
+                if on_progress is not None:
+                    on_progress(int(tested / total_combos * 100))
+
+                is_better = score > best_score
+                if score == best_score and score > 0:
+                    current_dist = abs(brightness) / 100.0 + abs(contrast - 1.0) / 2.0
+                    best_dist = abs(best_brightness) / 100.0 + abs(best_contrast - 1.0) / 2.0
+                    is_better = current_dist < best_dist
+
+                if is_better:
+                    best_score = score
+                    best_brightness = brightness
+                    best_contrast = contrast
+
+        return best_brightness, best_contrast, max(0, best_score)
 
     def _beep(self) -> None:
         try:

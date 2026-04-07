@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TMO Woo Admin Cleaner",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Ferme les onglets wc-better-management ouverts par la station, en conservant le plus récent.",
   "permissions": ["tabs", "storage", "alarms"],
   "host_permissions": ["*://*/wp-admin/admin.php*"],
@@ -10,6 +10,9 @@
   },
   "action": {
     "default_title": "Nettoyer les onglets Woo"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none';"
   },
   "commands": {
     "cleanup-tabs": {
