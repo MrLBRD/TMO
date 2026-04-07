@@ -99,6 +99,46 @@ Pour transformer ce projet en exécutable Windows depuis votre environnement :
 
 -----
 
+## 🔄 Publier une nouvelle version (release)
+
+### Étapes
+
+1. **Mettre à jour le numéro de version** dans les 3 fichiers suivants :
+
+   | Fichier | Variable |
+   | :--- | :--- |
+   | `main.py` | `__version__ = "X.Y.Z"` |
+   | `installer.iss` | `#define MyAppVersion "X.Y.Z"` |
+   | `chrome_extension/manifest.json` | `"version": "X.Y.Z"` |
+
+2. **Commiter et pousser un tag** `vX.Y.Z` :
+   ```bash
+   git add main.py installer.iss chrome_extension/manifest.json
+   git commit -m "chore: bump version to X.Y.Z"
+   git tag vX.Y.Z
+   git push origin main
+   git push origin vX.Y.Z
+   ```
+
+3. **GitHub Actions** détecte le tag `v*` → lance le workflow `Build TMO Windows` :
+   - Build PyInstaller (`TMO.spec`)
+   - Build installateur Inno Setup (`installer.iss`) → `TMO_Setup.exe`
+   - Crée automatiquement une release GitHub avec `TMO_Setup.exe` en asset
+
+### Mécanisme de mise à jour in-app
+
+L'application intègre un système de MAJ automatique (`core/updater.py`) :
+
+1. Au clic sur **"Vérifier MAJ"** (fenêtre Configuration), l'app interroge l'API GitHub : `GET /repos/MrLBRD/TMO/releases/latest`
+2. Si la version du tag distant est supérieure à `__version__`, le bouton de téléchargement apparaît
+3. `TMO_Setup.exe` est téléchargé dans le dossier temp système
+4. L'installateur est lancé en **processus détaché** — l'app se ferme, l'installateur tourne seul
+5. Au prochain démarrage, l'app détecte qu'elle vient d'être mise à jour et affiche une notification
+
+> **Note :** La release GitHub **doit** contenir un asset nommé exactement `TMO_Setup.exe`, c'est le nom attendu par `updater.py` (`INSTALLER_ASSET_NAME`).
+
+-----
+
 ## 💡 Conseils pour la Logitech C270
 
   * **Lumière :** La C270 gère mal les faibles luminosités. Prévoyez un éclairage direct sur la table pour éviter le grain sur la vidéo (ce qui gêne la lecture du QR code).
