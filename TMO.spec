@@ -5,11 +5,12 @@ from PyInstaller.utils.hooks import collect_dynamic_libs
 block_cipher = None
 
 cv2_binaries = collect_dynamic_libs("cv2")
+numpy_binaries = collect_dynamic_libs("numpy")
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=cv2_binaries,
+    binaries=cv2_binaries + numpy_binaries,
     datas=[],
     hiddenimports=[
         'PIL._tkinter_finder',

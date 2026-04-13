@@ -29,7 +29,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install pytest
-          pip install "numpy==1.26.4" "opencv-python-headless==4.13.0.92"
+          pip install "numpy>=2.0,<3" "opencv-python-headless==4.13.0.92"
           pip install pyzbar==0.1.9 pillow==12.2.0 requests==2.33.1
 
       - name: Run tests
