@@ -62,6 +62,9 @@ jobs:
           pip install "pyinstaller==6.10.0"
           pyinstaller TMO.spec
 
+      - name: Smoke test EXE (imports critiques)
+        run: dist\TMO.exe --smoke-test
+
       - name: Build installer with Inno Setup
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss

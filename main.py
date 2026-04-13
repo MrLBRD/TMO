@@ -1548,5 +1548,43 @@ def main() -> None:
     log.info("app_stopped")
 
 
+def smoke_test() -> None:
+    """Vérifie que tous les imports critiques fonctionnent dans l'EXE bundlé.
+
+    Appelé via --smoke-test dans la CI après le build PyInstaller.
+    Quitte avec code 0 si tout va bien, 1 sinon.
+    """
+    failures: list[str] = []
+
+    checks = [
+        ("numpy", "import numpy; numpy.array([1, 2, 3])"),
+        ("numpy._core._exceptions", "import numpy._core._exceptions"),
+        ("numpy._core.multiarray", "import numpy._core.multiarray"),
+        ("cv2", "import cv2"),
+        ("PIL", "from PIL import Image"),
+        ("customtkinter", "import customtkinter"),
+        ("pyzbar", "from pyzbar.pyzbar import decode"),
+        ("requests", "import requests"),
+    ]
+
+    for name, stmt in checks:
+        try:
+            exec(stmt)  # noqa: S102
+        except Exception as exc:
+            failures.append(f"  FAIL {name}: {exc}")
+
+    if failures:
+        print("smoke-test FAILED:")
+        for f in failures:
+            print(f)
+        sys.exit(1)
+
+    print(f"smoke-test OK — {len(checks)} imports verified")
+    sys.exit(0)
+
+
 if __name__ == "__main__":
-    main()
+    if "--smoke-test" in sys.argv:
+        smoke_test()
+    else:
+        main()
