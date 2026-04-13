@@ -1,18 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_all
 
 block_cipher = None
 
 cv2_binaries = collect_dynamic_libs("cv2")
-numpy_binaries = collect_dynamic_libs("numpy")
+numpy_datas, numpy_binaries, numpy_hiddenimports = collect_all("numpy")
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=cv2_binaries + numpy_binaries,
-    datas=[],
-    hiddenimports=[
+    datas=numpy_datas,
+    hiddenimports=numpy_hiddenimports + [
         'PIL._tkinter_finder',
         'pyzbar.pyzbar',
         'pyzbar.wrapper',
