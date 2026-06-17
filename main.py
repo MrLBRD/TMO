@@ -7,6 +7,7 @@ from ctypes import wintypes
 import os
 from pathlib import Path
 import queue
+import subprocess
 import threading
 import time
 import sys
@@ -1203,12 +1204,15 @@ class TmoApp(ctk.CTk):
         if self._closing:
             return
 
-        frame = self.recorder.get_latest_frame()
+        frame = self.recorder.get_latest_raw_frame()
         if frame is not None:
             try:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                resized = cv2.resize(rgb, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
-                img = Image.fromarray(resized)
+                # Downscale first, then draw overlays on the small frame: cheaper
+                # than compositing at capture resolution, and off the QR-scan path.
+                resized = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
+                resized = self.recorder.decorate_display_frame(resized)
+                rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(rgb)
                 self._photo = CTkImage(light_image=img, dark_image=img, size=(DISPLAY_WIDTH, DISPLAY_HEIGHT))
                 self.video_label.configure(image=self._photo)
             except Exception:
@@ -1361,6 +1365,7 @@ class TmoApp(ctk.CTk):
             self._config_window.focus()
 
     def _apply_config(self, cfg: AppConfig) -> None:
+        previous = self.config
         save_config(cfg)
 
         self.config = cfg
@@ -1370,20 +1375,35 @@ class TmoApp(ctk.CTk):
         ensure_dir(output_dir)
         clean_old_videos(output_dir=output_dir, retention_days=cfg.retention_days)
 
-        try:
-            self.recorder.stop()
-        except Exception:
-            pass
-
-        self.recorder = Recorder(
-            camera_index=cfg.camera_index,
-            camera_flip=cfg.camera_flip,
-            output_dir=output_dir,
-            scan_roi_percent=cfg.scan_roi_percent,
-            qr_brightness=cfg.qr_brightness,
-            qr_contrast=cfg.qr_contrast,
+        camera_changed = (
+            cfg.camera_index != previous.camera_index
+            or cfg.camera_flip != previous.camera_flip
         )
-        self.recorder.start()
+
+        if camera_changed:
+            # Camera index/flip changed → full restart required.
+            try:
+                self.recorder.stop()
+            except Exception:
+                pass
+
+            self.recorder = Recorder(
+                camera_index=cfg.camera_index,
+                camera_flip=cfg.camera_flip,
+                output_dir=output_dir,
+                scan_roi_percent=cfg.scan_roi_percent,
+                qr_brightness=cfg.qr_brightness,
+                qr_contrast=cfg.qr_contrast,
+            )
+            self.recorder.start()
+        else:
+            # Only QR/ROI/output changed → apply live, no camera re-open.
+            self.recorder.apply_settings(
+                output_dir=output_dir,
+                scan_roi_percent=cfg.scan_roi_percent,
+                qr_brightness=cfg.qr_brightness,
+                qr_contrast=cfg.qr_contrast,
+            )
         try:
             self.manual_entry.configure(placeholder_text="ID commande")
         except Exception:
@@ -1411,17 +1431,16 @@ class TmoApp(ctk.CTk):
         if not base:
             self._set_qr_debug("URL du site non configurée")
             return
-        try:
-            url = urljoin(base if base.endswith("/") else base + "/", f"wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}")
-        except Exception:
-            url = f"{base.rstrip('/')}/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}"
+        # order_id is already sanitized to [A-Za-z0-9_-]; safe to interpolate.
+        url = f"{base.rstrip('/')}/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}"
 
         def _open_browser() -> None:
             try:
                 chrome_path = _get_chrome_path()  # Use cached path for performance
                 if chrome_path:
-                    webbrowser.register('chrome', None, webbrowser.BackgroundBrowser(chrome_path))
-                    webbrowser.get('chrome').open_new_tab(url)
+                    # Launch Chrome directly — no per-call webbrowser.register.
+                    # Opens a new tab in the running instance if one exists.
+                    subprocess.Popen([chrome_path, url])
                 else:
                     webbrowser.open_new_tab(url)
             except Exception:

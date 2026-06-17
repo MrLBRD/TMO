@@ -104,7 +104,7 @@ class TestRecorderInitialState:
         assert recorder.recording_order_id is None
 
     def test_no_frame_on_init(self, recorder):
-        assert recorder.get_latest_frame() is None
+        assert recorder.get_latest_raw_frame() is None
 
     def test_qr_error_count_zero_on_init(self, recorder):
         assert recorder._qr_error_count == 0

@@ -133,10 +133,17 @@ class Recorder:
         scan_roi_percent: int = 90,
         qr_brightness: int = 0,
         qr_contrast: float = 1.0,
+        camera_width: int = 1280,
+        camera_height: int = 720,
     ) -> None:
         self.camera_index = camera_index
         self.camera_flip = str(camera_flip or "none").strip().lower()
         self.output_dir = output_dir or default_output_dir()
+
+        # Requested capture resolution (best-effort — the camera may ignore it).
+        # 1280x720 + MJPG unlocks 30fps on most webcams (incl. Logitech C270).
+        self._requested_width = int(camera_width)
+        self._requested_height = int(camera_height)
 
         self.events: queue.Queue[RecorderEvent] = queue.Queue()
 
@@ -145,7 +152,6 @@ class Recorder:
         self._capture: cv2.VideoCapture | None = None
 
         self._latest_frame_lock = threading.Lock()
-        self._latest_frame: np.ndarray | None = None
         self._latest_raw_frame: np.ndarray | None = None
 
         self._fps: float = 30.0
@@ -211,11 +217,16 @@ class Recorder:
         with self._recording_lock:
             return self._recording_order_id
 
-    def get_latest_frame(self) -> np.ndarray | None:
-        with self._latest_frame_lock:
-            if self._latest_frame is None:
-                return None
-            return self._latest_frame.copy()
+    def decorate_display_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Draw the scan-ROI box and (if recording) the REC indicator.
+
+        Called from the UI thread on the already-downscaled display frame so the
+        capture thread stays dedicated to the latency-critical QR-scan path.
+        """
+        frame = self._draw_scan_roi(frame)
+        if self.is_recording:
+            frame = self._draw_rec_indicator(frame)
+        return frame
 
     def get_latest_raw_frame(self) -> np.ndarray | None:
         with self._latest_frame_lock:
@@ -225,6 +236,28 @@ class Recorder:
 
     def pause_qr(self, paused: bool) -> None:
         self._qr_paused = paused
+
+    def apply_settings(
+        self,
+        output_dir: Path | None = None,
+        scan_roi_percent: int | None = None,
+        qr_brightness: int | None = None,
+        qr_contrast: float | None = None,
+    ) -> None:
+        """Update tunables live, without restarting the camera.
+
+        Used when only QR/ROI/output settings changed (camera index/flip
+        unchanged), avoiding the slow camera re-open and black-screen flicker.
+        A new output_dir only affects future recordings, not one in progress.
+        """
+        if output_dir is not None:
+            self.output_dir = output_dir
+        if scan_roi_percent is not None:
+            self.scan_roi_ratio = max(0.1, min(1.0, scan_roi_percent / 100.0))
+        if qr_brightness is not None:
+            self._qr_brightness = int(qr_brightness)
+        if qr_contrast is not None:
+            self._qr_contrast = float(qr_contrast)
 
     def start(self) -> None:
         if self._capture_thread and self._capture_thread.is_alive():
@@ -252,6 +285,24 @@ class Recorder:
             log.error("camera_open_failed index=%d", self.camera_index)
             self.events.put(RecorderEvent(type="error", message="camera_open_failed"))
             return
+
+        # Camera tuning for low-latency QR detection (best-effort — silently
+        # ignored by cameras/backends that don't support a given property).
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # 30fps in HD
+        except Exception:
+            pass
+        try:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._requested_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._requested_height)
+        except Exception:
+            pass
+        try:
+            # Keep only the freshest frame — drops the internal buffer lag that
+            # otherwise adds several frames of delay between scan and detection.
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
 
         # Drain initial frames — Windows cameras often return black frames during init
         if os.name == "nt":
@@ -395,13 +446,10 @@ class Recorder:
             height, width = frame.shape[:2]
             self._frame_size = (width, height)
 
-            display_frame = frame.copy()
-            display_frame = self._draw_scan_roi(display_frame)
-            if self.is_recording:
-                display_frame = self._draw_rec_indicator(display_frame)
-
+            # Overlays (scan ROI + REC indicator) are drawn later on the UI thread
+            # via decorate_display_frame(), on the downscaled display frame. Keeping
+            # them off this thread shortens the capture → QR-scan latency.
             with self._latest_frame_lock:
-                self._latest_frame = display_frame
                 self._latest_raw_frame = frame
 
             self._enqueue_recording_frame(frame)

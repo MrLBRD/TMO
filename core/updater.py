@@ -15,12 +15,30 @@ from pathlib import Path
 from typing import Callable
 
 import requests
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
 GITHUB_REPO = "MrLBRD/TMO"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALLER_ASSET_NAME = "TMO_Setup.exe"
+
+# Hosts autorisés pour le téléchargement de l'installateur et de son SHA256.
+# Defense-in-depth : même si la réponse de l'API GitHub était manipulée, on
+# refuse toute URL ne pointant pas vers l'infrastructure GitHub (HTTPS only).
+_ALLOWED_UPDATE_HOSTS = frozenset(
+    {"github.com", "api.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
+)
+
+
+def _is_allowed_update_url(url: str | None) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme == "https" and parsed.hostname in _ALLOWED_UPDATE_HOSTS
+    except Exception:
+        return False
 
 
 @dataclass
@@ -162,6 +180,10 @@ def download_update(
     Returns:
         Tuple of (success, path_or_error_message)
     """
+    if not _is_allowed_update_url(download_url):
+        log.error("update_download_blocked_url url_host=%s", urlparse(download_url or "").hostname)
+        return False, "URL de téléchargement non autorisée (hors GitHub)"
+
     try:
         response = requests.get(download_url, stream=True, timeout=timeout)
         response.raise_for_status()
@@ -182,6 +204,13 @@ def download_update(
                         progress_callback(downloaded, total_size)
 
         if sha256_url:
+            if not _is_allowed_update_url(sha256_url):
+                log.error("update_sha256_blocked_url url_host=%s", urlparse(sha256_url).hostname)
+                try:
+                    os.unlink(installer_path)
+                except OSError:
+                    pass
+                return False, "URL du hash de vérification non autorisée (hors GitHub)"
             try:
                 sha256_response = requests.get(sha256_url, timeout=10)
                 sha256_response.raise_for_status()

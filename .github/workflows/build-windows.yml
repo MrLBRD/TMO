@@ -35,6 +35,15 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v
 
+      - name: Audit dependencies (pip-audit)
+        # Non bloquant pour l'instant : signale les CVE des dépendances (directes
+        # et transitives) sans casser la release. Retirer continue-on-error pour
+        # en faire un gate strict une fois le bruit maîtrisé.
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
   build:
     needs: test
     runs-on: windows-latest
@@ -59,7 +68,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pip install "pyinstaller==6.10.0"
+          pip install "pyinstaller==6.21.0"
           pyinstaller TMO.spec
 
       - name: Smoke test EXE (imports critiques)
