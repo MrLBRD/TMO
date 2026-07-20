@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 
 import ctypes
 from ctypes import wintypes
