@@ -3,7 +3,7 @@ numpy>=2.4.6,<3
 opencv-python==4.13.0.92
 pyzbar==0.1.9
 customtkinter==5.2.2
-pillow==12.2.0
+pillow==12.3.0
 requests==2.34.2
 
 # Dépendances transitives de requests — épinglées pour un build reproductible
