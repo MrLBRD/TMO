@@ -155,6 +155,13 @@ class Recorder:
         self._latest_raw_frame: np.ndarray | None = None
 
         self._fps: float = 30.0
+        # Débit réellement délivré par la caméra, mesuré en continu. CAP_PROP_FPS
+        # ment presque toujours (30 déclaré, 10-15 livrés dès que l'auto-exposition
+        # ralentit le capteur) : écrire le MP4 à la valeur déclarée donne une vidéo
+        # accélérée. Voir _effective_fps().
+        self._measured_fps: float | None = None
+        self._frame_times: deque[float] = deque(maxlen=90)
+        self._fps_log_last: float = 0.0
         self._frame_size: tuple[int, int] | None = None
 
         self._recording_lock = threading.Lock()
@@ -163,7 +170,7 @@ class Recorder:
         self._recording_started_at: float | None = None
         self._writer_queue: queue.Queue[tuple[np.ndarray, float] | None] | None = None
         self._writer_thread: threading.Thread | None = None
-        self._writer_control: dict[str, int | bool] | None = None
+        self._writer_control: dict[str, float | bool] | None = None
 
         self.scan_roi_ratio = max(0.1, min(1.0, scan_roi_percent / 100.0))
         self._qr_brightness: int = int(qr_brightness)
@@ -206,6 +213,46 @@ class Recorder:
     @property
     def qr_backend(self) -> str | None:
         return self._qr_backend
+
+    @property
+    def measured_fps(self) -> float | None:
+        return self._measured_fps
+
+    def _effective_fps(self) -> float:
+        """FPS à inscrire dans le MP4 : le débit mesuré, sinon celui déclaré.
+
+        Clampé à [5, 60] pour qu'une mesure aberrante (caméra gelée, machine
+        surchargée au démarrage) ne produise pas un conteneur inexploitable.
+        """
+        fps = self._measured_fps if self._measured_fps else self._fps
+        try:
+            fps = float(fps)
+        except Exception:
+            fps = 30.0
+        if fps != fps or fps <= 0:  # NaN
+            fps = 30.0
+        return max(5.0, min(60.0, fps))
+
+    def _record_frame_time(self, now: float) -> None:
+        """Met à jour la moyenne glissante du débit caméra."""
+        self._frame_times.append(now)
+        if len(self._frame_times) < 10:
+            return
+
+        span = self._frame_times[-1] - self._frame_times[0]
+        if span <= 0:
+            return
+
+        self._measured_fps = (len(self._frame_times) - 1) / span
+
+        if now - self._fps_log_last >= 60.0:
+            self._fps_log_last = now
+            log.info(
+                "camera_fps measured=%.1f declared=%.1f index=%d",
+                self._measured_fps,
+                self._fps,
+                self.camera_index,
+            )
 
     @property
     def is_recording(self) -> bool:
@@ -315,6 +362,34 @@ class Recorder:
         else:
             self._fps = 30.0
 
+        # Mesure du débit réel avant le premier enregistrement : sans elle, un scan
+        # immédiat après le lancement ouvrirait le MP4 sur le FPS déclaré.
+        self._frame_times.clear()
+        self._measured_fps = None
+        try:
+            # Borné à 1.5 s : start() tourne sur le thread UI lors d'un changement
+            # de caméra. Si la mesure n'aboutit pas ici, _capture_loop l'affine en
+            # une seconde et la cadence constante du writer corrige la durée.
+            warmup_start = time.time()
+            probes = 0
+            while probes < 15 and (time.time() - warmup_start) < 1.5:
+                ok, _frame = cap.read()
+                if not ok:
+                    break
+                probes += 1
+                if probes > 2:  # ignore les premières frames (init capteur)
+                    self._record_frame_time(time.time())
+        except Exception:
+            pass
+
+        if self._measured_fps:
+            log.info(
+                "camera_fps_initial measured=%.1f declared=%.1f index=%d",
+                self._measured_fps,
+                self._fps,
+                self.camera_index,
+            )
+
         self._capture = cap
         self._capture_thread = threading.Thread(
             target=self._capture_loop,
@@ -386,16 +461,18 @@ class Recorder:
         ensure_dir(path.parent)
 
         width, height = frame_size
+        target_fps = self._effective_fps()
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(path), fourcc, self._fps, (width, height))
+        writer = cv2.VideoWriter(str(path), fourcc, target_fps, (width, height))
         if not writer.isOpened():
             self.events.put(RecorderEvent(type="error", message="video_writer_open_failed"))
             return
 
-        tail_buffer_frames = max(1, int(round(self._fps * 1.0)))
-        control: dict[str, int | bool] = {
+        tail_buffer_frames = max(1, int(round(target_fps * 1.0)))
+        control: dict[str, float | bool] = {
             "drop_tail": False,
             "tail_buffer_frames": int(tail_buffer_frames),
+            "target_fps": float(target_fps),
         }
 
         q: queue.Queue[tuple[np.ndarray, float] | None] = queue.Queue(maxsize=self.writer_queue_size)
@@ -429,6 +506,8 @@ class Recorder:
 
         while not self._stop_event.is_set():
             ok, frame = cap.read()
+            if ok:
+                self._record_frame_time(time.time())
             if not ok:
                 now = time.time()
                 if now - self._camera_read_fail_last_log >= 5.0:
@@ -736,7 +815,7 @@ class Recorder:
         self,
         writer: cv2.VideoWriter,
         q: queue.Queue[tuple[np.ndarray, float] | None],
-        control: dict[str, int | bool],
+        control: dict[str, float | bool],
     ) -> None:
         try:
             tail_buffer_frames = int(control.get("tail_buffer_frames", 0) or 0)
@@ -745,9 +824,26 @@ class Recorder:
         if tail_buffer_frames < 0:
             tail_buffer_frames = 0
 
+        try:
+            target_fps = float(control.get("target_fps", 30.0) or 30.0)
+        except Exception:
+            target_fps = 30.0
+        if target_fps <= 0:
+            target_fps = 30.0
+        frame_interval = 1.0 / target_fps
+        # Plafond de rattrapage : une frame ne comble jamais plus de 3 s de trou
+        # (caméra gelée, machine en veille) — sinon on gonflerait le fichier pour rien.
+        max_repeats = max(1, int(round(target_fps * 3.0)))
+
         buffer: deque[tuple[np.ndarray, float]] = deque()
+        # Cadence constante : chaque frame occupe autant de slots que sa durée réelle
+        # le demande. Garantit que la durée du MP4 == durée réelle filmée, même si
+        # le débit caméra varie (auto-exposition) pendant l'enregistrement.
+        first_ts: float | None = None
+        frames_written = 0
 
         def _write_frame(frame: np.ndarray, frame_ts: float) -> None:
+            nonlocal first_ts, frames_written
             try:
                 try:
                     ts = datetime.fromtimestamp(float(frame_ts)).strftime("%Y-%m-%d %H:%M:%S")
@@ -781,7 +877,18 @@ class Recorder:
                 except Exception:
                     pass
 
-                writer.write(frame)
+                if first_ts is None:
+                    first_ts = float(frame_ts)
+
+                slot = int(round((float(frame_ts) - first_ts) / frame_interval)) + 1
+                repeats = slot - frames_written
+                if frames_written == 0:
+                    repeats = max(1, repeats)
+                repeats = max(0, min(max_repeats, repeats))
+
+                for _ in range(repeats):
+                    writer.write(frame)
+                frames_written += repeats
             except Exception:
                 return
 

@@ -108,3 +108,82 @@ class TestRecorderInitialState:
 
     def test_qr_error_count_zero_on_init(self, recorder):
         assert recorder._qr_error_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Cadence vidéo : le MP4 doit durer aussi longtemps que la scène filmée
+# ---------------------------------------------------------------------------
+
+class _FakeWriter:
+    """VideoWriter minimal : compte les frames écrites."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def write(self, frame) -> None:
+        self.count += 1
+
+    def release(self) -> None:
+        pass
+
+
+def _played_seconds(recorder: Recorder, real_fps: float, target_fps: float, duration: float) -> float:
+    """Alimente _writer_loop avec un flux à `real_fps` et retourne la durée lue."""
+    import queue
+
+    import numpy as np
+
+    writer = _FakeWriter()
+    q: queue.Queue = queue.Queue()
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    t0 = 1_000_000.0
+    for i in range(int(real_fps * duration)):
+        q.put((frame.copy(), t0 + i / real_fps))
+    q.put(None)
+
+    recorder._writer_loop(
+        writer,
+        q,
+        {"drop_tail": False, "tail_buffer_frames": 0, "target_fps": float(target_fps)},
+    )
+    return writer.count / target_fps
+
+
+class TestWriterCadence:
+    def test_effective_fps_prefers_measured(self, recorder):
+        recorder._fps = 30.0
+        recorder._measured_fps = 11.5
+        assert recorder._effective_fps() == pytest.approx(11.5)
+
+    def test_effective_fps_falls_back_to_declared(self, recorder):
+        recorder._fps = 25.0
+        recorder._measured_fps = None
+        assert recorder._effective_fps() == pytest.approx(25.0)
+
+    def test_effective_fps_clamped(self, recorder):
+        recorder._measured_fps = 0.2
+        assert recorder._effective_fps() == pytest.approx(5.0)
+        recorder._measured_fps = 500.0
+        assert recorder._effective_fps() == pytest.approx(60.0)
+
+    def test_duration_matches_when_fps_correct(self, recorder):
+        assert _played_seconds(recorder, 10.0, 10.0, 20.0) == pytest.approx(20.0, abs=0.2)
+
+    def test_slow_camera_is_not_fast_forwarded(self, recorder):
+        # Le bug historique : caméra à 10 fps écrite dans un conteneur 30 fps
+        # donnait une vidéo 3x accélérée. Les frames doivent être dupliquées.
+        assert _played_seconds(recorder, 10.0, 30.0, 20.0) == pytest.approx(20.0, abs=0.2)
+
+    def test_fast_camera_is_not_slowed_down(self, recorder):
+        assert _played_seconds(recorder, 30.0, 12.5, 20.0) == pytest.approx(20.0, abs=0.2)
+
+    def test_measured_fps_from_frame_times(self, recorder):
+        t0 = 1_000_000.0
+        for i in range(30):
+            recorder._record_frame_time(t0 + i / 15.0)
+        assert recorder.measured_fps == pytest.approx(15.0, abs=0.1)
+
+    def test_measured_fps_needs_enough_samples(self, recorder):
+        recorder._record_frame_time(1_000_000.0)
+        recorder._record_frame_time(1_000_000.1)
+        assert recorder.measured_fps is None
