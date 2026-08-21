@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from core.recorder import Recorder
+from core.storage import parse_qr_value
 
 
 @pytest.fixture
@@ -20,76 +21,106 @@ def recorder(tmp_path: Path) -> Recorder:
 
 
 # ---------------------------------------------------------------------------
-# _extract_order_id_from_qr_value
+# parse_qr_value — v1 "Tk-{id}" et v2 "TK2:{id}:{carrier}:{items}"
+# (TicketPrinter/schema/ticket-qr-contract.md, repo TicketPrinter)
 # ---------------------------------------------------------------------------
 
-class TestExtractOrderIdFromQrValue:
-    def test_valid_qr_returns_id(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("tk-12345") == "12345"
+class TestParseQrValueV1:
+    def test_valid_qr_returns_id(self):
+        assert parse_qr_value("tk-12345") == ("12345", None)
 
-    def test_uppercase_prefix_accepted(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("TK-12345") == "12345"
+    def test_uppercase_prefix_accepted(self):
+        assert parse_qr_value("TK-12345") == ("12345", None)
 
-    def test_mixed_case_prefix_accepted(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("Tk-12345") == "12345"
+    def test_mixed_case_prefix_accepted(self):
+        assert parse_qr_value("Tk-12345") == ("12345", None)
 
-    def test_min_length_id_valid(self, recorder):
+    def test_min_length_id_valid(self):
         # 5 caractères = longueur minimale
-        result = recorder._extract_order_id_from_qr_value("tk-12345")
-        assert result == "12345"
+        assert parse_qr_value("tk-12345") == ("12345", None)
 
-    def test_max_length_id_valid(self, recorder):
+    def test_max_length_id_valid(self):
         # 10 caractères = longueur maximale
-        result = recorder._extract_order_id_from_qr_value("tk-1234567890")
-        assert result == "1234567890"
+        assert parse_qr_value("tk-1234567890") == ("1234567890", None)
 
-    def test_id_too_short_returns_none(self, recorder):
+    def test_id_too_short_returns_none(self):
         # "1234" = 4 chars < min 5
-        assert recorder._extract_order_id_from_qr_value("tk-1234") is None
+        assert parse_qr_value("tk-1234") is None
 
-    def test_id_too_long_returns_none(self, recorder):
+    def test_id_too_long_returns_none(self):
         # "12345678901" = 11 chars > max 10
-        assert recorder._extract_order_id_from_qr_value("tk-12345678901") is None
+        assert parse_qr_value("tk-12345678901") is None
 
-    def test_no_prefix_returns_none(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("12345") is None
+    def test_no_prefix_returns_none(self):
+        assert parse_qr_value("12345") is None
 
-    def test_wrong_prefix_returns_none(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("qr-12345") is None
+    def test_wrong_prefix_returns_none(self):
+        assert parse_qr_value("qr-12345") is None
 
-    def test_empty_string_returns_none(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("") is None
+    def test_empty_string_returns_none(self):
+        assert parse_qr_value("") is None
 
-    def test_whitespace_only_returns_none(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("   ") is None
+    def test_whitespace_only_returns_none(self):
+        assert parse_qr_value("   ") is None
 
-    def test_strips_surrounding_whitespace(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("  tk-12345  ") == "12345"
+    def test_strips_surrounding_whitespace(self):
+        assert parse_qr_value("  tk-12345  ") == ("12345", None)
 
-    def test_id_with_hyphen_valid(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("tk-12-34") == "12-34"
+    def test_id_with_hyphen_valid(self):
+        assert parse_qr_value("tk-12-34") == ("12-34", None)
 
-    def test_id_with_underscore_valid(self, recorder):
-        assert recorder._extract_order_id_from_qr_value("tk-12_34") == "12_34"
+    def test_id_with_underscore_valid(self):
+        assert parse_qr_value("tk-12_34") == ("12_34", None)
 
     # --- sécurité : injection dans le QR ---
 
-    def test_path_traversal_in_id_sanitized(self, recorder):
+    def test_path_traversal_in_id_sanitized(self):
         # "../etc" → replace "/" → ".._etc" → regex ".." → "_" → "__etc" (5 chars)
         # La traversée est neutralisée : résultat sûr "__etc", pas None
-        assert recorder._extract_order_id_from_qr_value("tk-../etc") == "__etc"
+        assert parse_qr_value("tk-../etc") == ("__etc", None)
 
-    def test_long_path_traversal_sanitized(self, recorder):
+    def test_long_path_traversal_sanitized(self):
         # Si le résultat sanitisé est dans les longueurs valides, il ne doit pas contenir ".."
-        result = recorder._extract_order_id_from_qr_value("tk-../etcc")
+        result = parse_qr_value("tk-../etcc")
         if result is not None:
-            assert ".." not in result
-            assert "/" not in result
+            order_id, _carrier_code = result
+            assert ".." not in order_id
+            assert "/" not in order_id
 
-    def test_no_backslash_in_result(self, recorder):
-        result = recorder._extract_order_id_from_qr_value("tk-12\\45")
+    def test_no_backslash_in_result(self):
+        result = parse_qr_value("tk-12\\45")
         if result is not None:
-            assert "\\" not in result
+            order_id, _carrier_code = result
+            assert "\\" not in order_id
+
+
+class TestParseQrValueV2:
+    def test_valid_v2_returns_id_and_carrier(self):
+        assert parse_qr_value("TK2:482913:MONR-C:SKUA1*2,SKUB7*1") == ("482913", "MONR-C")
+
+    def test_lowercase_marker_accepted(self):
+        assert parse_qr_value("tk2:482913:MONR-C:SKUA1*2") == ("482913", "MONR-C")
+
+    def test_no_items_block_still_valid(self):
+        assert parse_qr_value("TK2:482913:RMAG:") == ("482913", "RMAG")
+
+    def test_missing_carrier_field_returns_none(self):
+        assert parse_qr_value("TK2:482913") is None
+
+    def test_unknown_carrier_code_falls_back_to_none(self):
+        # Code transporteur inconnu (dérive du contrat côté producteur) :
+        # l'enregistrement démarre quand même, sans carrier_code.
+        assert parse_qr_value("TK2:482913:XXXX:SKUA1*2") == ("482913", None)
+
+    def test_invalid_order_id_returns_none(self):
+        assert parse_qr_value("TK2:12:MONR-C:SKUA1*2") is None
+
+    def test_carrier_code_lowercase_normalized(self):
+        assert parse_qr_value("TK2:482913:monr-c:SKUA1*2") == ("482913", "MONR-C")
+
+    def test_all_canonical_carrier_codes_accepted(self):
+        for code in ("DPD-R", "DPD-P", "DPD-D", "MONR-C", "MONR-D", "POFR-D", "RMAG", "OTHR"):
+            assert parse_qr_value(f"TK2:482913:{code}:SKUA1*1") == ("482913", code)
 
 
 # ---------------------------------------------------------------------------

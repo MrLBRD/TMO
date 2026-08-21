@@ -25,7 +25,15 @@ import cv2
 from core.config import AppConfig, load_config, log_path, save_config, resolve_output_dir, check_if_just_updated, set_last_run_version
 from core.logging_setup import setup_logging
 from core.recorder import Recorder, RecorderEvent, list_cameras
-from core.storage import clean_old_videos, disk_free_bytes, ensure_dir, format_bytes, is_valid_order_id, sanitize_order_id
+from core.storage import (
+    clean_old_videos,
+    disk_free_bytes,
+    ensure_dir,
+    format_bytes,
+    is_valid_order_id,
+    parse_qr_value,
+    sanitize_order_id,
+)
 from core.updater import UpdateInfo, check_for_updates_async, download_update, run_installer
 
 import logging
@@ -1243,7 +1251,7 @@ class TmoApp(ctk.CTk):
             self._dismiss_dms_dialog()
             self._set_status(f"Enregistrement en cours : {ev.order_id}")
             self.update_idletasks()
-            self._open_order_modal(ev.order_id)
+            self._open_order_modal(ev.order_id, ev.carrier_code)
 
         elif ev.type == "recording_stopped" and ev.order_id:
             self._dismiss_dms_dialog()
@@ -1324,12 +1332,16 @@ class TmoApp(ctk.CTk):
 
     def _start_from_raw(self, raw: str) -> None:
         raw = str(raw or "").strip()
-        if raw.lower().startswith("tk-"):
-            raw = raw[3:].strip()
-        safe_id = sanitize_order_id(raw)
-        if not is_valid_order_id(safe_id):
-            self._set_status("ID commande invalide")
-            return
+        parsed = parse_qr_value(raw)
+        if parsed is not None:
+            safe_id, carrier_code = parsed
+        else:
+            # Saisie manuelle d'un ID nu, sans préfixe "Tk-"/"TK2:".
+            safe_id = sanitize_order_id(raw)
+            carrier_code = None
+            if not is_valid_order_id(safe_id):
+                self._set_status("ID commande invalide")
+                return
 
         current = self.recorder.recording_order_id
         if current == safe_id:
@@ -1338,7 +1350,7 @@ class TmoApp(ctk.CTk):
         if current is not None:
             self.recorder.stop_recording(wait=False)
 
-        self.recorder.start_recording(safe_id)
+        self.recorder.start_recording(safe_id, carrier_code=carrier_code)
 
     def _on_start_clicked(self) -> None:
         self._start_from_raw(self.manual_entry.get())
@@ -1426,13 +1438,17 @@ class TmoApp(ctk.CTk):
         finally:
             self.destroy()
 
-    def _open_order_modal(self, order_id: str) -> None:
+    def _open_order_modal(self, order_id: str, carrier_code: str | None = None) -> None:
         base = (self.site_url or "").strip()
         if not base:
             self._set_qr_debug("URL du site non configurée")
             return
-        # order_id is already sanitized to [A-Za-z0-9_-]; safe to interpolate.
+        # order_id est déjà nettoyé à [A-Za-z0-9_-] ; carrier_code vient de la
+        # table canonique (TicketPrinter/schema/ticket-qr-contract.md) — sûrs
+        # à interpoler tels quels.
         url = f"{base.rstrip('/')}/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}"
+        if carrier_code:
+            url += f"&carrierCode={carrier_code}"
 
         def _open_browser() -> None:
             try:

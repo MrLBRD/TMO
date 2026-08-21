@@ -51,7 +51,7 @@ chrome_extension/
 - Les opérations lentes (browser, encodage) sont systématiquement déportées dans des threads daemon
 - Les events entre threads transitent par une `queue.Queue` lue dans `_poll_events()` toutes les 100ms
 - Format de fichier vidéo : `output/YYYY/MM/DD/{ORDER_ID}.mp4`
-- Format QR attendu : `Tk-{ORDER_ID}` (ORDER_ID : 5-10 caractères alphanumériques)
+- Format QR attendu : voir `TicketPrinter/schema/ticket-qr-contract.md` (repo TicketPrinter) — source de vérité, ne pas dupliquer les règles ici
 - Logging structuré via `logging` Python ; `api_key` et URLs sensibles ne sont jamais loggués
 
 # Folder Structure

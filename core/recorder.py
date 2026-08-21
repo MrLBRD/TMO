@@ -23,15 +23,30 @@ except Exception:
     zbar_decode = None
     ZBarSymbol = None
 
-from .storage import build_video_path, default_output_dir, ensure_dir, is_valid_order_id, sanitize_order_id
+# zbar (donc pyzbar) ne sait pas décoder le Data Matrix — pylibdmtx (libdmtx)
+# est utilisé en complément, en parallèle du backend QR choisi ci-dessous.
+try:
+    from pylibdmtx.pylibdmtx import decode as dmtx_decode
+except Exception:
+    dmtx_decode = None
 
-_QR_ERROR_THRESHOLD = 10  # Consecutive decode exceptions before disabling QR
+from .storage import (
+    build_video_path,
+    default_output_dir,
+    ensure_dir,
+    is_valid_order_id,
+    parse_qr_value,
+    sanitize_order_id,
+)
+
+_QR_ERROR_THRESHOLD = 10  # Consecutive decode exceptions before disabling QR/Data Matrix
 
 
 @dataclass(frozen=True)
 class RecorderEvent:
     type: str
     order_id: str | None = None
+    carrier_code: str | None = None
     message: str | None = None
     timestamp: float = field(default_factory=time.time)
 
@@ -204,6 +219,10 @@ class Recorder:
 
         self._qr_available = self._qr_backend is not None
         self._qr_error_count: int = 0
+
+        self._dmtx_available = dmtx_decode is not None
+        self._dmtx_error_count: int = 0
+
         self._camera_read_fail_last_log: float = 0.0
 
     @property
@@ -213,6 +232,10 @@ class Recorder:
     @property
     def qr_backend(self) -> str | None:
         return self._qr_backend
+
+    @property
+    def dmtx_available(self) -> bool:
+        return self._dmtx_available
 
     @property
     def measured_fps(self) -> float | None:
@@ -449,7 +472,7 @@ class Recorder:
                 )
             )
 
-    def start_recording(self, order_id: str) -> None:
+    def start_recording(self, order_id: str, carrier_code: str | None = None) -> None:
         safe_id = sanitize_order_id(order_id)
 
         frame_size = self._frame_size
@@ -494,9 +517,14 @@ class Recorder:
         t.start()
         self._beep()
 
-        log.info("recording_started order_id=%s path=%s", safe_id, path)
+        log.info("recording_started order_id=%s carrier_code=%s path=%s", safe_id, carrier_code, path)
         self.events.put(
-            RecorderEvent(type="recording_started", order_id=safe_id, message=str(path))
+            RecorderEvent(
+                type="recording_started",
+                order_id=safe_id,
+                carrier_code=carrier_code,
+                message=str(path),
+            )
         )
 
     def _capture_loop(self) -> None:
@@ -587,15 +615,43 @@ class Recorder:
             except queue.Full:
                 return
 
+    def _process_scan_candidates(self, candidates: list[str]) -> bool:
+        """Parse une liste de valeurs décodées (QR ou Data Matrix) et déclenche
+        l'enregistrement sur le premier candidat valide. Retourne True si un
+        candidat a été traité (l'appelant doit alors arrêter le scan pour cette
+        frame)."""
+        now = time.time()
+        for raw in candidates:
+            data = str(raw).strip()
+
+            parsed = parse_qr_value(data)
+            order_id, carrier_code = parsed if parsed is not None else (None, None)
+            self._emit_qr_debug(data, order_id)
+            if order_id is None:
+                continue
+
+            if order_id == self._last_scan_value and (now - self._last_scan_time) < self.scan_cooldown_seconds:
+                continue
+
+            self._last_scan_value = order_id
+            self._last_scan_time = now
+
+            self._handle_order_id(order_id, carrier_code)
+            return True
+
+        return False
+
     def _scan_and_handle(self, frame: np.ndarray) -> None:
-        if not self._qr_available:
+        if not self._qr_available and not self._dmtx_available:
             return
         if self._qr_paused:
             return
 
         roi = self._extract_scan_roi(frame)
 
-        if self._qr_backend == "pyzbar" and zbar_decode is not None:
+        # Le gris est partagé par pyzbar (QR) et pylibdmtx (Data Matrix).
+        gray: np.ndarray | None = None
+        if (self._qr_available and self._qr_backend == "pyzbar") or self._dmtx_available:
             try:
                 gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
                 if self._qr_brightness != 0 or abs(self._qr_contrast - 1.0) > 0.01:
@@ -603,6 +659,7 @@ class Recorder:
             except Exception:
                 return
 
+        if self._qr_available and self._qr_backend == "pyzbar" and zbar_decode is not None:
             try:
                 if ZBarSymbol is not None:
                     results = zbar_decode(gray, symbols=[ZBarSymbol.QRCODE])
@@ -621,92 +678,70 @@ class Recorder:
                 self.events.put(RecorderEvent(type="error", message="qr_decoder_failed"))
                 return
 
-            now = time.time()
+            candidates: list[str] = []
             for res in results:
                 if getattr(res, "type", "") != "QRCODE":
                     continue
-
                 raw = getattr(res, "data", b"")
                 try:
-                    data = raw.decode("utf-8", errors="ignore").strip()
+                    candidates.append(raw.decode("utf-8", errors="ignore").strip())
                 except Exception:
                     continue
 
-                order_id = self._extract_order_id_from_qr_value(data)
-                self._emit_qr_debug(data, order_id)
-                if order_id is None:
-                    continue
-
-                if order_id == self._last_scan_value and (now - self._last_scan_time) < self.scan_cooldown_seconds:
-                    continue
-
-                self._last_scan_value = order_id
-                self._last_scan_time = now
-
-                self._handle_order_id(order_id)
+            if self._process_scan_candidates(candidates):
                 return
 
-        if self._qr_backend == "opencv":
+        elif self._qr_available and self._qr_backend == "opencv":
             detector = self._opencv_qr_detector
             if detector is None:
                 self._qr_available = False
-                return
+            else:
+                candidates = []
+                try:
+                    if hasattr(detector, "detectAndDecodeMulti"):
+                        ok, decoded_info, _points, _ = detector.detectAndDecodeMulti(roi)
+                        if ok and decoded_info:
+                            candidates = [s for s in decoded_info if s]
+                    else:
+                        data, _points, _ = detector.detectAndDecode(roi)
+                        if data:
+                            candidates = [data]
+                    self._qr_error_count = 0
+                except Exception:
+                    self._qr_error_count += 1
+                    if self._qr_error_count >= _QR_ERROR_THRESHOLD:
+                        log.error("qr_disabled backend=opencv after %d errors", self._qr_error_count)
+                        self._qr_available = False
+                    self.events.put(RecorderEvent(type="error", message="qr_opencv_failed"))
+                    return
 
-            candidates: list[str] = []
+                if self._process_scan_candidates(candidates):
+                    return
+
+        if self._dmtx_available and gray is not None:
             try:
-                if hasattr(detector, "detectAndDecodeMulti"):
-                    ok, decoded_info, _points, _ = detector.detectAndDecodeMulti(roi)
-                    if ok and decoded_info:
-                        candidates = [s for s in decoded_info if s]
-                else:
-                    data, _points, _ = detector.detectAndDecode(roi)
-                    if data:
-                        candidates = [data]
-                self._qr_error_count = 0
+                results = dmtx_decode(gray, timeout=200)
+                self._dmtx_error_count = 0
             except Exception:
-                self._qr_error_count += 1
-                if self._qr_error_count >= _QR_ERROR_THRESHOLD:
-                    log.error("qr_disabled backend=opencv after %d errors", self._qr_error_count)
-                    self._qr_available = False
-                self.events.put(RecorderEvent(type="error", message="qr_opencv_failed"))
+                self._dmtx_error_count += 1
+                if self._dmtx_error_count >= _QR_ERROR_THRESHOLD:
+                    log.error("dmtx_disabled after %d errors", self._dmtx_error_count)
+                    self._dmtx_available = False
+                self.events.put(RecorderEvent(type="error", message="dmtx_decoder_failed"))
                 return
 
-            now = time.time()
-            for data in candidates:
-                data = str(data).strip()
-
-                order_id = self._extract_order_id_from_qr_value(data)
-                self._emit_qr_debug(data, order_id)
-                if order_id is None:
+            candidates = []
+            for res in results:
+                raw = getattr(res, "data", b"")
+                try:
+                    candidates.append(raw.decode("utf-8", errors="ignore").strip())
+                except Exception:
                     continue
 
-                if order_id == self._last_scan_value and (now - self._last_scan_time) < self.scan_cooldown_seconds:
-                    continue
-
-                self._last_scan_value = order_id
-                self._last_scan_time = now
-
-                self._handle_order_id(order_id)
+            if self._process_scan_candidates(candidates):
                 return
 
-    def _extract_order_id_from_qr_value(self, value: str) -> str | None:
-        value = str(value).strip()
-        if not value:
-            return None
-
-        prefix = "tk-"
-        if not value.lower().startswith(prefix):
-            return None
-
-        candidate = value[len(prefix) :].strip()
-
-        candidate = sanitize_order_id(candidate)
-        if not is_valid_order_id(candidate):
-            return None
-
-        return candidate
-
-    def _handle_order_id(self, order_id: str) -> None:
+    def _handle_order_id(self, order_id: str, carrier_code: str | None = None) -> None:
         safe_id = sanitize_order_id(order_id)
         if not is_valid_order_id(safe_id):
             return
@@ -720,7 +755,7 @@ class Recorder:
         if current is not None:
             self.stop_recording(wait=False, drop_tail=True)
 
-        self.start_recording(safe_id)
+        self.start_recording(safe_id, carrier_code=carrier_code)
 
     def _scan_roi_bounds(self, frame: np.ndarray) -> tuple[int, int, int, int]:
         h, w = frame.shape[:2]

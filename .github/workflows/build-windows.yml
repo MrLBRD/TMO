@@ -24,13 +24,13 @@ jobs:
           python-version: "3.11"
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libzbar0 libglib2.0-0
+        run: sudo apt-get update && sudo apt-get install -y libzbar0 libdmtx0 libglib2.0-0
 
       - name: Install Python dependencies
         run: |
           pip install pytest
           pip install "numpy>=2.0,<3" "opencv-python-headless==4.13.0.92"
-          pip install pyzbar==0.1.9 pillow==12.2.0 requests==2.33.1
+          pip install pyzbar==0.1.9 pylibdmtx==0.1.10 pillow==12.2.0 requests==2.33.1
 
       - name: Run tests
         run: pytest tests/ -v

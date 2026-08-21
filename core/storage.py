@@ -7,8 +7,13 @@ import shutil
 import sys
 
 DEFAULT_RETENTION_DAYS = 45
+# Bornes de longueur et table transporteur définies dans
+# TicketPrinter/schema/ticket-qr-contract.md (repo TicketPrinter)
 MIN_ORDER_ID_LEN = 5
 MAX_ORDER_ID_LEN = 10
+CARRIER_CODES = frozenset(
+    {"DPD-R", "DPD-P", "DPD-D", "MONR-C", "MONR-D", "POFR-D", "RMAG", "OTHR"}
+)
 
 
 def project_root() -> Path:
@@ -42,6 +47,54 @@ def sanitize_order_id(order_id: str) -> str:
 def is_valid_order_id(order_id: str) -> bool:
     safe_id = sanitize_order_id(order_id)
     return MIN_ORDER_ID_LEN <= len(safe_id) <= MAX_ORDER_ID_LEN
+
+
+def sanitize_carrier_code(carrier_code: str) -> str:
+    cleaned = carrier_code.strip().upper()
+    return re.sub(r"[^A-Z0-9_-]+", "", cleaned)
+
+
+def is_valid_carrier_code(carrier_code: str) -> bool:
+    return sanitize_carrier_code(carrier_code) in CARRIER_CODES
+
+
+def parse_qr_value(value: str) -> tuple[str, str | None] | None:
+    """Parse une valeur scannée (QR ou Data Matrix) selon
+    TicketPrinter/schema/ticket-qr-contract.md (repo TicketPrinter).
+
+    - v1 : "Tk-{order_id}"
+    - v2 : "TK2:{order_id}:{carrier_code}:{sku1}*{qty1},..." (bloc articles
+      ignoré ici, non utilisé côté TMO)
+
+    Retourne (order_id, carrier_code) ou None si le format/order_id est
+    invalide. carrier_code vaut None en v1, ou si le code transporteur du v2
+    n'est pas dans la table canonique.
+    """
+    value = str(value or "").strip()
+    if not value:
+        return None
+
+    if value.upper().startswith("TK2:"):
+        parts = value.split(":", 3)
+        if len(parts) < 3:
+            return None
+        order_id = sanitize_order_id(parts[1])
+        if not is_valid_order_id(order_id):
+            return None
+        carrier_code = sanitize_carrier_code(parts[2])
+        if not is_valid_carrier_code(carrier_code):
+            carrier_code = None
+        return order_id, carrier_code
+
+    prefix = "tk-"
+    if not value.lower().startswith(prefix):
+        return None
+
+    candidate = sanitize_order_id(value[len(prefix) :])
+    if not is_valid_order_id(candidate):
+        return None
+
+    return candidate, None
 
 
 def build_video_filename(order_id: str, on_date: date | None = None) -> str:
