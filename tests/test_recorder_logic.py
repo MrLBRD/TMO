@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+import core.recorder as recorder_module
 from core.recorder import Recorder
 from core.storage import parse_qr_value
 
@@ -218,3 +220,90 @@ class TestWriterCadence:
         recorder._record_frame_time(1_000_000.0)
         recorder._record_frame_time(1_000_000.1)
         assert recorder.measured_fps is None
+
+
+# ---------------------------------------------------------------------------
+# Scan Data Matrix (pylibdmtx) — throttling pour ne pas bloquer le thread de
+# capture caméra. pylibdmtx bloque jusqu'à son timeout quand rien n'est
+# détecté, ce qui est le cas quasi permanent pour un ticket v1 (QR uniquement,
+# jamais de Data Matrix) : on ne tente donc le décodage Data Matrix qu'1 cycle
+# de scan sur `_dmtx_scan_interval`, avec un timeout réduit.
+# ---------------------------------------------------------------------------
+
+class TestDmtxThrottling:
+    @pytest.fixture(autouse=True)
+    def _dmtx_only(self, recorder):
+        # Isole le chemin Data Matrix : pas de backend QR actif.
+        recorder._qr_available = False
+        recorder._dmtx_available = True
+
+    @staticmethod
+    def _frame():
+        return np.zeros((480, 640, 3), dtype=np.uint8)
+
+    def test_dmtx_scan_interval_default(self, recorder):
+        assert recorder._dmtx_scan_interval > 1
+
+    def test_dmtx_not_called_before_interval_reached(self, recorder, monkeypatch):
+        calls: list[None] = []
+        monkeypatch.setattr(recorder_module, "dmtx_decode", lambda *a, **k: calls.append(None) or [])
+
+        for _ in range(recorder._dmtx_scan_interval - 1):
+            recorder._scan_and_handle(self._frame())
+
+        assert calls == []
+
+    def test_dmtx_called_once_per_full_interval(self, recorder, monkeypatch):
+        calls: list[None] = []
+        monkeypatch.setattr(recorder_module, "dmtx_decode", lambda *a, **k: calls.append(None) or [])
+
+        for _ in range(recorder._dmtx_scan_interval):
+            recorder._scan_and_handle(self._frame())
+
+        assert len(calls) == 1
+
+    def test_dmtx_called_again_after_full_cycle(self, recorder, monkeypatch):
+        calls: list[None] = []
+        monkeypatch.setattr(recorder_module, "dmtx_decode", lambda *a, **k: calls.append(None) or [])
+
+        for _ in range(2 * recorder._dmtx_scan_interval):
+            recorder._scan_and_handle(self._frame())
+
+        assert len(calls) == 2
+
+    def test_dmtx_uses_reduced_timeout(self, recorder, monkeypatch):
+        seen_timeouts: list[object] = []
+
+        def fake_decode(gray, timeout=None):
+            seen_timeouts.append(timeout)
+            return []
+
+        monkeypatch.setattr(recorder_module, "dmtx_decode", fake_decode)
+
+        for _ in range(recorder._dmtx_scan_interval):
+            recorder._scan_and_handle(self._frame())
+
+        assert seen_timeouts == [recorder_module._DMTX_TIMEOUT_MS]
+        assert recorder_module._DMTX_TIMEOUT_MS < 200  # régression : ancien défaut trop lent
+
+    def test_dmtx_decode_error_is_counted_and_does_not_raise(self, recorder, monkeypatch):
+        def raise_decode(gray, timeout=None):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(recorder_module, "dmtx_decode", raise_decode)
+
+        for _ in range(recorder._dmtx_scan_interval):
+            recorder._scan_and_handle(self._frame())
+
+        assert recorder._dmtx_error_count == 1
+
+    def test_valid_dmtx_v2_payload_is_recognized(self, recorder, monkeypatch):
+        class _Result:
+            data = b"TK2:482913:MONR-C:SKUA1*2"
+
+        monkeypatch.setattr(recorder_module, "dmtx_decode", lambda *a, **k: [_Result()])
+
+        for _ in range(recorder._dmtx_scan_interval):
+            recorder._scan_and_handle(self._frame())
+
+        assert recorder._last_scan_value == "482913"

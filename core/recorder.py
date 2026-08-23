@@ -40,6 +40,7 @@ from .storage import (
 )
 
 _QR_ERROR_THRESHOLD = 10  # Consecutive decode exceptions before disabling QR/Data Matrix
+_DMTX_TIMEOUT_MS = 50  # Réduit du défaut (souvent 200ms+) pour ne pas throttler le thread de capture
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,14 @@ class Recorder:
 
         self._dmtx_available = dmtx_decode is not None
         self._dmtx_error_count: int = 0
+
+        # pylibdmtx bloque jusqu'à _DMTX_TIMEOUT_MS quand aucun Data Matrix n'est
+        # présent (cas quasi permanent pour un ticket v1, QR uniquement). Comme
+        # _scan_and_handle tourne dans le thread de capture caméra, on limite ce
+        # coût en ne tentant le scan Data Matrix qu'1 cycle de scan sur
+        # _DMTX_SCAN_INTERVAL, pour ne pas throttler le débit du scan QR.
+        self._dmtx_frame_counter = 0
+        self._dmtx_scan_interval = 5
 
         self._camera_read_fail_last_log: float = 0.0
 
@@ -719,8 +728,13 @@ class Recorder:
                     return
 
         if self._dmtx_available and gray is not None:
+            self._dmtx_frame_counter += 1
+            if self._dmtx_frame_counter < self._dmtx_scan_interval:
+                return
+            self._dmtx_frame_counter = 0
+
             try:
-                results = dmtx_decode(gray, timeout=200)
+                results = dmtx_decode(gray, timeout=_DMTX_TIMEOUT_MS)
                 self._dmtx_error_count = 0
             except Exception:
                 self._dmtx_error_count += 1
