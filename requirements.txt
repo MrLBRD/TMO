@@ -1,9 +1,9 @@
 # Dépendances directes
 numpy>=2.4.6,<2.5.1
-opencv-python==4.13.0.92
+opencv-python==5.0.0.93
 pyzbar==0.1.9
 pylibdmtx==0.1.10
-customtkinter==5.2.2
+customtkinter==6.0.0
 pillow==12.3.0
 requests==2.34.2
 pyserial==3.5
