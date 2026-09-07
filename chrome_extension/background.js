@@ -125,6 +125,17 @@ chrome.commands.onCommand.addListener(async (cmd) => {
     return;
   }
 
+  // Ramène l'onglet et sa fenêtre au premier plan avant d'imprimer — sans ça,
+  // l'impression partirait sur un onglet resté en arrière-plan.
+  try {
+    await chrome.tabs.update(target.id, { active: true });
+    if (target.windowId !== undefined) {
+      await chrome.windows.update(target.windowId, { focused: true });
+    }
+  } catch (err) {
+    console.warn("[TMO] Échec mise au premier plan de l'onglet :", err);
+  }
+
   try {
     await chrome.tabs.sendMessage(target.id, {
       action: "tmo-print-request",
