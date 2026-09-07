@@ -12,5 +12,5 @@ pyserial==3.5
 # et pour embarquer des versions corrigées dans l'EXE (cf. pip-audit en CI)
 certifi==2026.7.22
 charset-normalizer==3.4.9
-idna==3.18
+idna==3.19
 urllib3==2.7.0
