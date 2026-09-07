@@ -151,6 +151,7 @@ class Recorder:
         qr_contrast: float = 1.0,
         camera_width: int = 1280,
         camera_height: int = 720,
+        scan_enabled: bool = True,
     ) -> None:
         self.camera_index = camera_index
         self.camera_flip = str(camera_flip or "none").strip().lower()
@@ -192,6 +193,10 @@ class Recorder:
         self._qr_brightness: int = int(qr_brightness)
         self._qr_contrast: float = float(qr_contrast)
         self._qr_paused: bool = False
+        # Mode "lecteur externe" : caméra en film uniquement, la détection
+        # QR/Data Matrix dans l'image est désactivée (l'ID commande arrive via
+        # une douchette USB HID, voir TmoApp.manual_entry).
+        self._scan_enabled: bool = bool(scan_enabled)
         self.scan_cooldown_seconds = 1.0
         self.writer_queue_size = 120
 
@@ -245,6 +250,10 @@ class Recorder:
     @property
     def dmtx_available(self) -> bool:
         return self._dmtx_available
+
+    @property
+    def scan_enabled(self) -> bool:
+        return self._scan_enabled
 
     @property
     def measured_fps(self) -> float | None:
@@ -322,6 +331,7 @@ class Recorder:
         scan_roi_percent: int | None = None,
         qr_brightness: int | None = None,
         qr_contrast: float | None = None,
+        scan_enabled: bool | None = None,
     ) -> None:
         """Update tunables live, without restarting the camera.
 
@@ -337,6 +347,8 @@ class Recorder:
             self._qr_brightness = int(qr_brightness)
         if qr_contrast is not None:
             self._qr_contrast = float(qr_contrast)
+        if scan_enabled is not None:
+            self._scan_enabled = bool(scan_enabled)
 
     def start(self) -> None:
         if self._capture_thread and self._capture_thread.is_alive():
@@ -651,6 +663,8 @@ class Recorder:
         return False
 
     def _scan_and_handle(self, frame: np.ndarray) -> None:
+        if not self._scan_enabled:
+            return
         if not self._qr_available and not self._dmtx_available:
             return
         if self._qr_paused:
@@ -786,6 +800,9 @@ class Recorder:
         return frame[y1:y2, x1:x2]
 
     def _draw_scan_roi(self, frame: np.ndarray) -> np.ndarray:
+        if not self._scan_enabled:
+            return frame
+
         x1, y1, x2, y2 = self._scan_roi_bounds(frame)
         h, w = frame.shape[:2]
 

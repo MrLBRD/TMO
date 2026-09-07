@@ -109,6 +109,31 @@ chrome.commands.onCommand.addListener((cmd) => {
   if (cmd === "cleanup-tabs") cleanupTabs();
 });
 chrome.action.onClicked.addListener(() => cleanupTabs());
+
+// Raccourci global d'impression (actif même si l'onglet Woo n'a pas le focus).
+// Le canal "onglet actif" (raccourci configurable) est géré directement par
+// content_script.js — celui-ci ne sert que de relai pour le cas hors-focus,
+// seul cas où chrome.commands (touche fixe, remappable via
+// chrome://extensions/shortcuts) est nécessaire.
+chrome.commands.onCommand.addListener(async (cmd) => {
+  if (cmd !== "trigger-print-global") return;
+
+  const allTabs = await chrome.tabs.query({});
+  const target = allTabs.find((tab) => isTargetPage(tab.url));
+  if (!target || target.id === undefined) {
+    console.warn("[TMO] Aucun onglet commande ouvert pour l'impression.");
+    return;
+  }
+
+  try {
+    await chrome.tabs.sendMessage(target.id, {
+      action: "tmo-print-request",
+      source: "global_shortcut",
+    });
+  } catch (err) {
+    console.warn("[TMO] Échec envoi message impression :", err);
+  }
+});
 chrome.runtime.onStartup.addListener(() => cleanupTabs());
 chrome.runtime.onInstalled.addListener(() => cleanupTabs());
 

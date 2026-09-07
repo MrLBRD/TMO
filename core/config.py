@@ -9,6 +9,9 @@ import sys
 from .storage import default_output_dir, project_root
 
 
+VALID_INPUT_MODES = ("camera", "external_scanner_keyboard", "external_scanner_serial")
+
+
 @dataclass
 class AppConfig:
     camera_index: int = 0
@@ -20,6 +23,21 @@ class AppConfig:
     scan_roi_percent: int = 90
     qr_brightness: int = 0
     qr_contrast: float = 1.0
+    # "camera" : détection QR/Data Matrix dans l'image caméra (comportement historique).
+    # "external_scanner_keyboard" : caméra en film uniquement, douchette USB en mode
+    #   émulation clavier HID — "tape" la valeur dans le champ de saisie manuelle
+    #   (nécessite que la fenêtre TMO ait le focus Windows au moment du scan).
+    # "external_scanner_serial" : caméra en film uniquement, douchette USB en mode
+    #   USB-COM Virtual Serial Port (ex. Tera 9000) — lue en tâche de fond sur un
+    #   port COM, sans besoin de focus (voir core/serial_scanner.py).
+    input_mode: str = "camera"
+    scanner_serial_port: str = ""
+    scanner_serial_baud: int = 9600
+
+
+def _normalize_input_mode(value: object) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in VALID_INPUT_MODES else "camera"
 
 
 def _config_dir() -> Path:
@@ -115,6 +133,21 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         except ValueError:
             pass
 
+    input_mode = os.environ.get("TMO_INPUT_MODE")
+    if input_mode is not None and input_mode.strip() != "":
+        cfg.input_mode = _normalize_input_mode(input_mode)
+
+    scanner_serial_port = os.environ.get("TMO_SCANNER_SERIAL_PORT")
+    if scanner_serial_port is not None and scanner_serial_port.strip() != "":
+        cfg.scanner_serial_port = scanner_serial_port.strip()
+
+    scanner_serial_baud = os.environ.get("TMO_SCANNER_SERIAL_BAUD")
+    if scanner_serial_baud is not None and scanner_serial_baud.strip() != "":
+        try:
+            cfg.scanner_serial_baud = int(scanner_serial_baud)
+        except ValueError:
+            pass
+
     return cfg
 
 
@@ -170,6 +203,18 @@ def load_config() -> tuple[AppConfig, str | None]:
                 if "qr_contrast" in data:
                     try:
                         cfg.qr_contrast = max(0.5, min(3.0, float(data["qr_contrast"])))
+                    except Exception:
+                        pass
+                if "input_mode" in data:
+                    cfg.input_mode = _normalize_input_mode(data["input_mode"])
+                if "scanner_serial_port" in data:
+                    try:
+                        cfg.scanner_serial_port = str(data["scanner_serial_port"])
+                    except Exception:
+                        pass
+                if "scanner_serial_baud" in data:
+                    try:
+                        cfg.scanner_serial_baud = int(data["scanner_serial_baud"])
                     except Exception:
                         pass
         except Exception as e:

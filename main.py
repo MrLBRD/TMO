@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 import ctypes
 from ctypes import wintypes
@@ -25,6 +25,7 @@ import cv2
 from core.config import AppConfig, load_config, log_path, save_config, resolve_output_dir, check_if_just_updated, set_last_run_version
 from core.logging_setup import setup_logging
 from core.recorder import Recorder, RecorderEvent, list_cameras
+from core.serial_scanner import SerialScanner, list_serial_ports
 from core.storage import (
     clean_old_videos,
     disk_free_bytes,
@@ -185,82 +186,138 @@ class ConfigWindow(ctk.CTkToplevel):
             row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=12
         )
 
+        # Mode de lecture (caméra QR/DataMatrix vs douchette USB externe)
+        ctk.CTkLabel(self._scroll, text="Mode de lecture").grid(
+            row=8, column=0, sticky="w", padx=12, pady=6
+        )
+        self._input_mode_labels = {
+            "camera": "Caméra (QR/DataMatrix intégré)",
+            "external_scanner_keyboard": "Douchette USB — mode clavier (HID)",
+            "external_scanner_serial": "Douchette USB — mode port série (USB-COM)",
+        }
+        self._input_mode_values = {v: k for k, v in self._input_mode_labels.items()}
+        self.input_mode_var = tk.StringVar(
+            value=self._input_mode_labels.get(config.input_mode, self._input_mode_labels["camera"])
+        )
+        self.input_mode_menu = ctk.CTkOptionMenu(
+            self._scroll,
+            variable=self.input_mode_var,
+            values=list(self._input_mode_labels.values()),
+            command=self._on_input_mode_change,
+        )
+        self.input_mode_menu.grid(row=8, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
+        ctk.CTkLabel(
+            self._scroll,
+            text="En mode douchette, la caméra filme uniquement (pas de scan QR). Mode clavier :"
+            " la douchette \"tape\" l'ID dans le champ principal (la fenêtre TMO doit avoir le"
+            " focus au moment du scan). Mode port série : lu en tâche de fond, sans besoin de focus"
+            " (ex. Tera 9000 en \"USB-COM Virtual Serial Port Mode\").",
+            font=("Arial", 11), text_color="#9ca3af", anchor="w", justify="left", wraplength=560,
+        ).grid(row=9, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 6))
+
+        # Port série (uniquement pertinent en mode "external_scanner_serial")
+        ctk.CTkLabel(self._scroll, text="Port série").grid(
+            row=10, column=0, sticky="w", padx=12, pady=6
+        )
+        self.serial_port_var = tk.StringVar(value=config.scanner_serial_port or "(aucun détecté)")
+        self.serial_port_menu = ctk.CTkOptionMenu(
+            self._scroll, variable=self.serial_port_var, values=[self.serial_port_var.get()]
+        )
+        self.serial_port_menu.grid(row=10, column=1, sticky="ew", padx=12, pady=6)
+        self.serial_refresh_button = ctk.CTkButton(
+            self._scroll, text="Rafraîchir", command=self._refresh_serial_ports
+        )
+        self.serial_refresh_button.grid(row=10, column=2, sticky="e", padx=(0, 12), pady=6)
+
+        ctk.CTkLabel(self._scroll, text="Vitesse (baud)").grid(
+            row=11, column=0, sticky="w", padx=12, pady=6
+        )
+        self.serial_baud_entry = ctk.CTkEntry(self._scroll)
+        self.serial_baud_entry.insert(0, str(config.scanner_serial_baud))
+        self.serial_baud_entry.grid(row=11, column=1, columnspan=2, sticky="ew", padx=12, pady=6)
+
         # QR detection settings
         ctk.CTkLabel(self._scroll, text="Réglages détection QR", font=("Arial", 13, "bold"), anchor="w").grid(
-            row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6)
+            row=12, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6)
         )
 
         ctk.CTkLabel(self._scroll, text="Zone scan (%)").grid(
-            row=9, column=0, sticky="w", padx=12, pady=6
+            row=13, column=0, sticky="w", padx=12, pady=6
         )
         self.roi_var = tk.IntVar(value=int(config.scan_roi_percent))
-        ctk.CTkSlider(
+        self.roi_slider = ctk.CTkSlider(
             self._scroll, from_=50, to=100, number_of_steps=50, variable=self.roi_var,
             command=self._on_slider_change,
-        ).grid(row=9, column=1, sticky="ew", padx=12, pady=6)
+        )
+        self.roi_slider.grid(row=13, column=1, sticky="ew", padx=12, pady=6)
         self.roi_value_label = ctk.CTkLabel(self._scroll, text=f"{config.scan_roi_percent}%", width=50, anchor="w")
-        self.roi_value_label.grid(row=9, column=2, sticky="w", padx=(0, 12), pady=6)
+        self.roi_value_label.grid(row=13, column=2, sticky="w", padx=(0, 12), pady=6)
 
         ctk.CTkLabel(self._scroll, text="Luminosité QR").grid(
-            row=10, column=0, sticky="w", padx=12, pady=6
+            row=14, column=0, sticky="w", padx=12, pady=6
         )
         self.brightness_var = tk.IntVar(value=int(config.qr_brightness))
-        ctk.CTkSlider(
+        self.brightness_slider = ctk.CTkSlider(
             self._scroll, from_=-100, to=100, number_of_steps=200, variable=self.brightness_var,
             command=self._on_slider_change,
-        ).grid(row=10, column=1, sticky="ew", padx=12, pady=6)
+        )
+        self.brightness_slider.grid(row=14, column=1, sticky="ew", padx=12, pady=6)
         b_sign = "+" if config.qr_brightness >= 0 else ""
         self.brightness_value_label = ctk.CTkLabel(self._scroll, text=f"{b_sign}{config.qr_brightness}", width=50, anchor="w")
-        self.brightness_value_label.grid(row=10, column=2, sticky="w", padx=(0, 12), pady=6)
+        self.brightness_value_label.grid(row=14, column=2, sticky="w", padx=(0, 12), pady=6)
 
         ctk.CTkLabel(self._scroll, text="Contraste QR").grid(
-            row=11, column=0, sticky="w", padx=12, pady=6
+            row=15, column=0, sticky="w", padx=12, pady=6
         )
         self.contrast_var = tk.DoubleVar(value=float(config.qr_contrast))
-        ctk.CTkSlider(
+        self.contrast_slider = ctk.CTkSlider(
             self._scroll, from_=0.5, to=3.0, number_of_steps=25, variable=self.contrast_var,
             command=self._on_slider_change,
-        ).grid(row=11, column=1, sticky="ew", padx=12, pady=6)
+        )
+        self.contrast_slider.grid(row=15, column=1, sticky="ew", padx=12, pady=6)
         self.contrast_value_label = ctk.CTkLabel(self._scroll, text=f"{config.qr_contrast:.2f}", width=50, anchor="w")
-        self.contrast_value_label.grid(row=11, column=2, sticky="w", padx=(0, 12), pady=6)
+        self.contrast_value_label.grid(row=15, column=2, sticky="w", padx=(0, 12), pady=6)
 
         # Camera preview for QR calibration
         self.preview_label = ctk.CTkLabel(self._scroll, text="En attente de la caméra...", width=560, height=315)
-        self.preview_label.grid(row=12, column=0, columnspan=3, padx=12, pady=(6, 0))
+        self.preview_label.grid(row=16, column=0, columnspan=3, padx=12, pady=(6, 0))
         ctk.CTkLabel(
             self._scroll, text="Aperçu niveaux de gris — image exacte analysée par le scanner QR",
             font=("Arial", 11), text_color="#9ca3af",
-        ).grid(row=13, column=0, columnspan=3, padx=12, pady=(2, 4))
+        ).grid(row=17, column=0, columnspan=3, padx=12, pady=(2, 4))
 
         # Auto-calibration
         self.calibration_label = ctk.CTkLabel(
             self._scroll, text="Cadrez un QR code puis cliquez Calibrer",
             anchor="w", text_color="#9ca3af", font=("Arial", 11),
         )
-        self.calibration_label.grid(row=14, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 6))
+        self.calibration_label.grid(row=18, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 6))
         self.calibrate_button = ctk.CTkButton(
             self._scroll, text="Calibrer", width=100, command=self._start_calibration
         )
-        self.calibrate_button.grid(row=14, column=2, sticky="e", padx=12, pady=(4, 6))
+        self.calibrate_button.grid(row=18, column=2, sticky="e", padx=12, pady=(4, 6))
 
         # Separator 2
         ctk.CTkFrame(self._scroll, height=2, fg_color="#3f3f46").grid(
-            row=15, column=0, columnspan=3, sticky="ew", padx=12, pady=8
+            row=19, column=0, columnspan=3, sticky="ew", padx=12, pady=8
         )
 
         # Version and update section
         ctk.CTkLabel(self._scroll, text="Version").grid(
-            row=16, column=0, sticky="w", padx=12, pady=6
+            row=20, column=0, sticky="w", padx=12, pady=6
         )
         self.version_label = ctk.CTkLabel(self._scroll, text=f"v{__version__}", anchor="w")
-        self.version_label.grid(row=16, column=1, sticky="w", padx=12, pady=6)
+        self.version_label.grid(row=20, column=1, sticky="w", padx=12, pady=6)
         self.update_button = ctk.CTkButton(
             self._scroll, text="Vérifier MAJ", width=100, command=self._check_for_updates
         )
-        self.update_button.grid(row=16, column=2, sticky="e", padx=12, pady=6)
+        self.update_button.grid(row=20, column=2, sticky="e", padx=12, pady=6)
 
         self.update_status_label = ctk.CTkLabel(self._scroll, text="", anchor="w")
-        self.update_status_label.grid(row=17, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
+        self.update_status_label.grid(row=21, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
+
+        self._refresh_serial_ports(preselect=config.scanner_serial_port)
+        self._apply_input_mode_state(config.input_mode)
 
         self.grab_set()
         self._camera_refreshing = False
@@ -286,6 +343,41 @@ class ConfigWindow(ctk.CTkToplevel):
             self._preview_after_id = None
         self._recorder.pause_qr(False)
         super().destroy()
+
+    def _on_input_mode_change(self, _label: str | None = None) -> None:
+        value = self._input_mode_values.get(self.input_mode_var.get(), "camera")
+        self._apply_input_mode_state(value)
+
+    def _apply_input_mode_state(self, input_mode: str) -> None:
+        qr_state = "disabled" if input_mode != "camera" else "normal"
+        for widget in (self.roi_slider, self.brightness_slider, self.contrast_slider, self.calibrate_button):
+            try:
+                widget.configure(state=qr_state)
+            except Exception:
+                pass
+
+        serial_state = "normal" if input_mode == "external_scanner_serial" else "disabled"
+        for widget in (self.serial_port_menu, self.serial_refresh_button, self.serial_baud_entry):
+            try:
+                widget.configure(state=serial_state)
+            except Exception:
+                pass
+
+    def _refresh_serial_ports(self, preselect: str | None = None) -> None:
+        ports = list_serial_ports()
+        values = [f"{device} — {desc}" for device, desc in ports] or ["(aucun détecté)"]
+        self.serial_port_menu.configure(values=values)
+
+        target = preselect if preselect is not None else self._serial_port_device()
+        for device, desc in ports:
+            if device == target:
+                self.serial_port_var.set(f"{device} — {desc}")
+                return
+        self.serial_port_var.set(values[0])
+
+    def _serial_port_device(self) -> str:
+        # "COM5 — USB Serial Device (COM5)" -> "COM5"
+        return self.serial_port_var.get().split(" — ", 1)[0].strip()
 
     def _on_slider_change(self, _=None) -> None:
         roi = int(self.roi_var.get())
@@ -637,6 +729,22 @@ class ConfigWindow(ctk.CTkToplevel):
             self.error_label.configure(text="L'URL du site doit commencer par https:// ou http://")
             return
 
+        input_mode = self._input_mode_values.get(self.input_mode_var.get(), "camera")
+
+        scanner_serial_port = self._serial_port_device()
+        if scanner_serial_port.startswith("("):  # "(aucun détecté)"
+            scanner_serial_port = ""
+
+        try:
+            scanner_serial_baud = int(self.serial_baud_entry.get().strip() or "9600")
+        except ValueError:
+            self.error_label.configure(text="Vitesse (baud) invalide")
+            return
+
+        if input_mode == "external_scanner_serial" and not scanner_serial_port:
+            self.error_label.configure(text="Sélectionnez un port série pour la douchette")
+            return
+
         cfg = AppConfig(
             camera_index=camera_index,
             camera_flip=self.flip_var.get().strip(),
@@ -647,6 +755,9 @@ class ConfigWindow(ctk.CTkToplevel):
             scan_roi_percent=int(self.roi_var.get()),
             qr_brightness=int(self.brightness_var.get()),
             qr_contrast=round(float(self.contrast_var.get()), 2),
+            input_mode=input_mode,
+            scanner_serial_port=scanner_serial_port,
+            scanner_serial_baud=scanner_serial_baud,
         )
 
         self._on_apply(cfg)
@@ -1099,6 +1210,7 @@ class TmoApp(ctk.CTk):
             placeholder_text="ID commande",
         )
         self.manual_entry.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self.manual_entry.bind("<Return>", lambda _e: self._on_start_clicked())
 
         self.start_button = ctk.CTkButton(
             bottom,
@@ -1130,6 +1242,8 @@ class TmoApp(ctk.CTk):
         self._closing: bool = False
         self._dms_dialog: DeadManSwitchDialog | None = None
         self._dms_last_reset: float = 0.0
+        self._serial_scanner: SerialScanner | None = None
+        self._start_serial_scanner(config)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -1150,6 +1264,8 @@ class TmoApp(ctk.CTk):
 
         self.after(10, self._update_frame)
         self.after(100, self._poll_events)
+        self.after(400, self._refocus_scanner_entry)
+        self.after(50, self._poll_serial_scanner)
 
     def _set_status(self, text: str) -> None:
         self.status_label.configure(text=text)
@@ -1275,6 +1391,12 @@ class TmoApp(ctk.CTk):
                 self._set_qr_debug(f"QR: {raw} (invalide)")
 
     def _ready_status_text(self) -> str:
+        if self.config.input_mode == "external_scanner_keyboard":
+            return "Prêt (douchette clavier — caméra en film uniquement)"
+        if self.config.input_mode == "external_scanner_serial":
+            if self._serial_scanner is not None:
+                return f"Prêt (douchette série sur {self.config.scanner_serial_port})"
+            return "Prêt (douchette série — port non connecté)"
         if not self.recorder.qr_available:
             return "Prêt (QR indisponible)"
         backend = self.recorder.qr_backend
@@ -1353,7 +1475,63 @@ class TmoApp(ctk.CTk):
         self.recorder.start_recording(safe_id, carrier_code=carrier_code)
 
     def _on_start_clicked(self) -> None:
-        self._start_from_raw(self.manual_entry.get())
+        raw = self.manual_entry.get()
+        if not raw.strip():
+            # Ignoré : évite qu'un terminateur CR+LF de douchette USB (2 touches,
+            # la 2e arrivant sur un champ déjà vidé) écrase le statut valide par
+            # "ID commande invalide".
+            return
+        self._start_from_raw(raw)
+        try:
+            self.manual_entry.delete(0, "end")
+        except Exception:
+            pass
+
+    def _refocus_scanner_entry(self) -> None:
+        if not self._closing:
+            try:
+                if self.config.input_mode == "external_scanner_keyboard":
+                    current = self.focus_get()
+                    if current in (None, self.manual_entry):
+                        self.manual_entry.focus_set()
+            except Exception:
+                pass
+            self.after(400, self._refocus_scanner_entry)
+
+    def _start_serial_scanner(self, config: AppConfig) -> None:
+        self._stop_serial_scanner()
+        if config.input_mode != "external_scanner_serial" or not config.scanner_serial_port:
+            return
+        try:
+            self._serial_scanner = SerialScanner(config.scanner_serial_port, config.scanner_serial_baud)
+            self._serial_scanner.start()
+        except Exception as e:
+            log.error("serial_scanner_start_failed error=%s", e)
+            self._serial_scanner = None
+
+    def _stop_serial_scanner(self) -> None:
+        if self._serial_scanner is not None:
+            try:
+                self._serial_scanner.stop()
+            except Exception:
+                pass
+            self._serial_scanner = None
+
+    def _poll_serial_scanner(self) -> None:
+        if self._closing:
+            return
+
+        scanner = self._serial_scanner
+        if scanner is not None:
+            try:
+                while True:
+                    raw = scanner.lines.get_nowait()
+                    if raw:
+                        self._start_from_raw(raw)
+            except queue.Empty:
+                pass
+
+        self.after(50, self._poll_serial_scanner)
 
     def _on_config_clicked(self) -> None:
         if self._config_window is not None and self._config_window.winfo_exists():
@@ -1392,6 +1570,16 @@ class TmoApp(ctk.CTk):
             or cfg.camera_flip != previous.camera_flip
         )
 
+        scan_enabled = cfg.input_mode == "camera"
+
+        serial_changed = (
+            cfg.input_mode != previous.input_mode
+            or cfg.scanner_serial_port != previous.scanner_serial_port
+            or cfg.scanner_serial_baud != previous.scanner_serial_baud
+        )
+        if serial_changed:
+            self._start_serial_scanner(cfg)
+
         if camera_changed:
             # Camera index/flip changed → full restart required.
             try:
@@ -1406,6 +1594,7 @@ class TmoApp(ctk.CTk):
                 scan_roi_percent=cfg.scan_roi_percent,
                 qr_brightness=cfg.qr_brightness,
                 qr_contrast=cfg.qr_contrast,
+                scan_enabled=scan_enabled,
             )
             self.recorder.start()
         else:
@@ -1415,9 +1604,16 @@ class TmoApp(ctk.CTk):
                 scan_roi_percent=cfg.scan_roi_percent,
                 qr_brightness=cfg.qr_brightness,
                 qr_contrast=cfg.qr_contrast,
+                scan_enabled=scan_enabled,
             )
         try:
-            self.manual_entry.configure(placeholder_text="ID commande")
+            if cfg.input_mode == "external_scanner_keyboard":
+                placeholder = "Scannez (douchette clavier) ou saisissez l'ID commande"
+            elif cfg.input_mode == "external_scanner_serial":
+                placeholder = "Scannez avec la douchette série — ID commande"
+            else:
+                placeholder = "ID commande"
+            self.manual_entry.configure(placeholder_text=placeholder)
         except Exception:
             pass
         self._set_status(self._ready_status_text())
@@ -1435,6 +1631,7 @@ class TmoApp(ctk.CTk):
                 except Exception:
                     pass
             self.recorder.stop()
+            self._stop_serial_scanner()
         finally:
             self.destroy()
 
@@ -1565,6 +1762,7 @@ def main() -> None:
         scan_roi_percent=cfg.scan_roi_percent,
         qr_brightness=cfg.qr_brightness,
         qr_contrast=cfg.qr_contrast,
+        scan_enabled=cfg.input_mode == "camera",
     )
     recorder.start()
 

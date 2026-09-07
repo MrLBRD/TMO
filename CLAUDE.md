@@ -1,6 +1,6 @@
 # Project Overview
 
-TMO est une application de bureau Python qui enregistre automatiquement des vidéos de préparation de commandes e-commerce. Un opérateur scanne un QR code sur un ticket (type ticket de caisse) avec une webcam ; l'app démarre un enregistrement MP4 horodaté et ouvre la page de commande dans Chrome. Une extension Chrome ferme automatiquement les anciens onglets pour garder l'interface nette.
+TMO est une application de bureau Python qui enregistre automatiquement des vidéos de préparation de commandes e-commerce. Un opérateur scanne un QR code/Data Matrix sur un ticket (type ticket de caisse) avec une webcam, ou avec une douchette USB externe (`input_mode=external_scanner_keyboard` : émulation clavier HID, ou `external_scanner_serial` : port COM virtuel, ex. Tera 9000 — caméra en film uniquement dans les deux cas) ; l'app démarre un enregistrement MP4 horodaté et ouvre la page de commande dans Chrome. Une extension Chrome ferme automatiquement les anciens onglets pour garder l'interface nette, et relaie un raccourci clavier d'impression d'étiquette vers la page de commande (voir `notes/guide_architecture_impression.md`).
 
 # Architecture
 
@@ -8,13 +8,20 @@ TMO est une application de bureau Python qui enregistre automatiquement des vid�
 main.py              — Orchestrateur principal : GUI CustomTkinter, event loop, threads
 core/
   recorder.py        — Capture vidéo (OpenCV), détection QR (pyzbar), écriture MP4
+  serial_scanner.py  — Lecture en tâche de fond d'une douchette en mode USB-COM Virtual
+                        Serial Port (pyserial) — pas de dépendance au focus fenêtre
   storage.py         — Gestion fichiers : chemins, nettoyage rétention, espace disque
   config.py          — Chargement/sauvegarde config JSON, surcharge par variables d'env
   logging_setup.py   — RotatingFileHandler (1 MB × 3 backups, tmo.log)
   updater.py         — Auto-update via GitHub Releases (télécharge TMO_Setup.exe, vérifie SHA256)
 chrome_extension/
-  background.js      — Service worker MV3 : suit les onglets TMO ouverts, ferme les anciens
-  manifest.json      — Permissions : tabs, storage, alarms ; host : wp-admin/admin.php*
+  background.js      — Service worker MV3 : suit les onglets TMO ouverts, ferme les anciens ;
+                        relaie le raccourci global d'impression (chrome.commands) vers l'onglet actif
+  content_script.js  — Injecté sur wp-admin/admin.php* : écoute le raccourci "onglet actif"
+                        (paramétrable, voir options.js) et les messages relayés par background.js ;
+                        émet l'event DOM `tmo-print-request` que le plugin WordPress écoute
+  options.html/.js   — Page de réglages : choix du raccourci "onglet actif" (chrome.storage.sync)
+  manifest.json      — Permissions : tabs, storage, alarms ; content script sur wp-admin/admin.php*
 ```
 
 ### Modèle de threads
@@ -37,6 +44,7 @@ chrome_extension/
 - **CustomTkinter** — GUI moderne dark mode
 - **OpenCV (cv2)** — Capture webcam, encodage MP4, fallback QR
 - **pyzbar** — Détection QR rapide (bibliothèque C) avec fallback OpenCV
+- **pyserial** — Lecture douchette USB en mode port COM virtuel (`input_mode=external_scanner_serial`)
 - **Pillow (PIL)** — Conversion frames pour affichage tkinter
 - **PyInstaller** — Compilation → EXE Windows
 - **Inno Setup** — Installeur Windows (produit `TMO_Setup.exe`)
@@ -59,7 +67,7 @@ chrome_extension/
 ```
 TMO/
 ├── main.py                  # Point d'entrée, classes TmoApp / ConfigWindow / OverlayWindow / DeadManSwitchDialog
-├── core/                    # Modules métier (recorder, storage, config, logging_setup, updater)
+├── core/                    # Modules métier (recorder, serial_scanner, storage, config, logging_setup, updater)
 ├── chrome_extension/        # Extension Chrome (manifest.json + background.js)
 ├── .github/workflows/       # CI/CD GitHub Actions (build-windows.yml)
 ├── .github/dependabot.yml   # Mise à jour automatique des actions GitHub (hebdomadaire)
@@ -108,6 +116,9 @@ Fichier : `%APPDATA%\TMO\config.json` (Windows) / `~/.config/TMO/config.json` (L
 | `retention_days` | `45` | Rétention vidéos (jours) |
 | `max_recording_minutes` | `15` | Dead man's switch (0 = désactivé) |
 | `site_url` | `""` | URL du site WooCommerce (doit commencer par `https://` ou `http://`) |
+| `input_mode` | `"camera"` | `camera` (scan QR/DataMatrix dans l'image) / `external_scanner_keyboard` (douchette USB en émulation clavier HID — nécessite le focus fenêtre) / `external_scanner_serial` (douchette USB en port COM virtuel, lue en tâche de fond sans focus) |
+| `scanner_serial_port` | `""` | Port COM de la douchette en mode `external_scanner_serial` (ex. `COM5`) |
+| `scanner_serial_baud` | `9600` | Vitesse (baud) du port série de la douchette |
 
 Toutes les clés sont surchargeables par variables d'environnement `TMO_*`.
 
