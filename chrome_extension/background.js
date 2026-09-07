@@ -1,6 +1,7 @@
 const TARGET_PATH = "/wp-admin/admin.php";
 const TARGET_PARAM = "wc-better-management";
 const STORAGE_KEY = "tmo_tracked_tabs";
+const LAST_ORDER_KEY = "tmo_last_order_id";
 
 // Vérifie si une URL est une ouverture TMO (avec orderCheck)
 function isTmoOpenUrl(url) {
@@ -21,32 +22,66 @@ function isTargetPage(url) {
   } catch { return false; }
 }
 
-// Ajouter un tab ID au tracking
-async function trackTab(tabId) {
+// Extrait l'order_id (orderCheck) d'une URL, si présent
+function extractOrderId(url) {
+  try {
+    return new URL(url).searchParams.get("orderCheck") || null;
+  } catch { return null; }
+}
+
+// Ajouter un tab ID au tracking, associé à son order_id (tabId -> orderId)
+async function trackTab(tabId, orderId) {
   const data = await chrome.storage.local.get(STORAGE_KEY);
-  const tracked = new Set(data[STORAGE_KEY] || []);
-  tracked.add(tabId);
-  await chrome.storage.local.set({ [STORAGE_KEY]: [...tracked] });
+  const tracked = data[STORAGE_KEY] || {};
+  tracked[tabId] = orderId;
+  const toSet = { [STORAGE_KEY]: tracked };
+  if (orderId) toSet[LAST_ORDER_KEY] = orderId;
+  await chrome.storage.local.set(toSet);
 }
 
 // Retirer un tab ID du tracking
 async function untrackTab(tabId) {
   const data = await chrome.storage.local.get(STORAGE_KEY);
-  const tracked = new Set(data[STORAGE_KEY] || []);
-  tracked.delete(tabId);
-  await chrome.storage.local.set({ [STORAGE_KEY]: [...tracked] });
+  const tracked = data[STORAGE_KEY] || {};
+  delete tracked[tabId];
+  await chrome.storage.local.set({ [STORAGE_KEY]: tracked });
 }
 
 // Récupérer les tabs TMO trackées
 async function getTrackedTabs() {
   const data = await chrome.storage.local.get(STORAGE_KEY);
-  const trackedIds = new Set(data[STORAGE_KEY] || []);
+  const trackedIds = new Set(Object.keys(data[STORAGE_KEY] || {}).map(Number));
   if (!trackedIds.size) return [];
 
   const allTabs = await chrome.tabs.query({});
   return allTabs.filter(tab =>
     trackedIds.has(tab.id) && isTargetPage(tab.url)
   );
+}
+
+// Détermine l'onglet à cibler pour l'impression hors-focus :
+// 1. l'onglet dont l'URL porte exactement le dernier order_id ouvert par TMO
+// 2. à défaut, parmi les onglets trackés (ouverts par TMO), le plus récemment actif
+// 3. à défaut, parmi tous les onglets wc-better-management, le plus récemment actif
+async function findPrintTarget() {
+  const data = await chrome.storage.local.get([STORAGE_KEY, LAST_ORDER_KEY]);
+  const tracked = data[STORAGE_KEY] || {};
+  const lastOrderId = data[LAST_ORDER_KEY];
+
+  const allTabs = await chrome.tabs.query({});
+  const candidates = allTabs.filter(tab => tab.id !== undefined && isTargetPage(tab.url));
+  if (!candidates.length) return null;
+
+  if (lastOrderId) {
+    const exact = candidates.find(tab => extractOrderId(tab.url) === lastOrderId);
+    if (exact) return exact;
+  }
+
+  const trackedIds = new Set(Object.keys(tracked).map(Number));
+  const trackedCandidates = candidates.filter(tab => trackedIds.has(tab.id));
+  const pool = trackedCandidates.length ? trackedCandidates : candidates;
+
+  return pool.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
 }
 
 // Cleanup: ferme les anciennes tabs TMO, garde la plus récente
@@ -86,7 +121,7 @@ async function cleanupTabs() {
 // la tab active. L'extension doit fermer les anciennes tabs, pas la tab courante.
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (tab.url && isTmoOpenUrl(tab.url)) {
-    await trackTab(tab.id);
+    await trackTab(tab.id, extractOrderId(tab.url));
     await cleanupTabs();
   }
 });
@@ -94,7 +129,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 // Tracker quand une tab est mise à jour avec orderCheck
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.url && isTmoOpenUrl(changeInfo.url)) {
-    await trackTab(tabId);
+    await trackTab(tabId, extractOrderId(changeInfo.url));
     await cleanupTabs();
   }
 });
@@ -118,8 +153,7 @@ chrome.action.onClicked.addListener(() => cleanupTabs());
 chrome.commands.onCommand.addListener(async (cmd) => {
   if (cmd !== "trigger-print-global") return;
 
-  const allTabs = await chrome.tabs.query({});
-  const target = allTabs.find((tab) => isTargetPage(tab.url));
+  const target = await findPrintTarget();
   if (!target || target.id === undefined) {
     console.warn("[TMO] Aucun onglet commande ouvert pour l'impression.");
     return;

@@ -95,13 +95,23 @@ Extrait `manifest.json` (commande globale — touche fixe, remappable uniquement
 }
 ```
 
-`background.js` relaie vers l'onglet `wc-better-management` déjà repéré par la logique
-existante de nettoyage (`isTargetPage`) :
+`background.js` relaie vers l'onglet `wc-better-management` déterminé par `findPrintTarget()` :
+1. l'onglet dont l'URL porte exactement le dernier `orderCheck` (order_id) ouvert par TMO
+   (mémorisé dans `chrome.storage.local` sous `tmo_last_order_id` à chaque ouverture/mise à
+   jour d'un onglet TMO) ;
+2. à défaut, parmi les onglets trackés par TMO (`tmo_tracked_tabs`), le plus récemment actif
+   (`lastAccessed`) ;
+3. à défaut, parmi tous les onglets `wc-better-management` ouverts (même non ouverts par TMO),
+   le plus récemment actif.
+
+Un simple `.find()` sur le premier onglet correspondant (ancienne implémentation) prenait
+l'onglet dans l'ordre renvoyé par `chrome.tabs.query({})`, pas forcément le bon si plusieurs
+onglets `wc-better-management` étaient ouverts (autre fenêtre, ancien onglet pas encore
+nettoyé) — d'où l'ajout du matching par order_id et du tri par récence.
 ```javascript
 chrome.commands.onCommand.addListener(async (cmd) => {
   if (cmd !== "trigger-print-global") return;
-  const allTabs = await chrome.tabs.query({});
-  const target = allTabs.find((tab) => isTargetPage(tab.url));
+  const target = await findPrintTarget();
   if (!target) return;
   await chrome.tabs.sendMessage(target.id, { action: "tmo-print-request", source: "global_shortcut" });
 });
