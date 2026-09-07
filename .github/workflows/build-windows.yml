@@ -30,7 +30,7 @@ jobs:
         run: |
           pip install pytest
           pip install "numpy>=2.0,<3" "opencv-python-headless==4.13.0.92"
-          pip install pyzbar==0.1.9 pylibdmtx==0.1.10 pillow==12.2.0 requests==2.33.1
+          pip install pyzbar==0.1.9 pylibdmtx==0.1.10 pillow==12.3.0 requests==2.34.2
 
       - name: Run tests
         run: pytest tests/ -v
@@ -68,7 +68,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pip install "pyinstaller==6.21.0"
+          pip install "pyinstaller==6.22.2"
           pyinstaller TMO.spec
 
       - name: Smoke test EXE (imports critiques)
