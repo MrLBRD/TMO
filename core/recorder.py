@@ -52,7 +52,16 @@ class RecorderEvent:
     timestamp: float = field(default_factory=time.time)
 
 
-def list_cameras(max_index: int = 10) -> list[tuple[int, int | None, int | None]]:
+def list_cameras(
+    max_index: int = 10, skip_index: int | None = None
+) -> list[tuple[int, int | None, int | None]]:
+    """Sonde les index caméra 0..max_index en les ouvrant brièvement.
+
+    `skip_index` (l'index déjà utilisé par le Recorder actif) est exclu de la
+    sonde : le rouvrir via DirectShow/MSMF pendant qu'un autre handle du même
+    périphérique est déjà ouvert casse le flux de capture en cours (constaté :
+    ouvrir les Paramètres coupait la caméra jusqu'au redémarrage de l'app).
+    """
     found: list[tuple[int, int | None, int | None]] = []
     prev_log_level: int | None = None
     used_log_api: str | None = None
@@ -75,6 +84,10 @@ def list_cameras(max_index: int = 10) -> list[tuple[int, int | None, int | None]
 
     try:
         for idx in range(max_index + 1):
+            if skip_index is not None and idx == skip_index:
+                found.append((idx, None, None))
+                continue
+
             cap: cv2.VideoCapture | None
             if os.name == "nt":
                 cap = None
@@ -562,7 +575,7 @@ class Recorder:
                 if now - self._camera_read_fail_last_log >= 5.0:
                     log.warning("camera_read_failed index=%d", self.camera_index)
                     self._camera_read_fail_last_log = now
-                self.events.put(RecorderEvent(type="error", message="camera_read_failed"))
+                    self.events.put(RecorderEvent(type="error", message="camera_read_failed"))
                 time.sleep(0.2)
                 continue
 

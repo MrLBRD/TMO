@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.3.3"
+__version__ = "1.3.4"
 
 import ctypes
 from ctypes import wintypes
@@ -14,7 +14,7 @@ import sys
 from typing import Callable
 import webbrowser
 
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import tkinter as tk
 
 import customtkinter as ctk
@@ -630,8 +630,10 @@ class ConfigWindow(ctk.CTkToplevel):
         except Exception:
             pass
 
+        active_index = self._recorder.camera_index
+
         def _work() -> None:
-            cameras = list_cameras(max_index=max_index)
+            cameras = list_cameras(max_index=max_index, skip_index=active_index)
             self.after(0, lambda: self._apply_camera_list(cameras))
 
         threading.Thread(target=_work, name="tmo_list_cameras", daemon=True).start()
@@ -1376,6 +1378,12 @@ class TmoApp(ctk.CTk):
         elif ev.type == "error":
             msg = ev.message or "unknown"
             log.error("recorder_error message=%s", msg)
+            # Un enregistrement en cours reste prioritaire dans le statut affiché
+            # (voir CLAUDE.md) : une erreur caméra intermittente ne doit pas
+            # masquer le statut "Enregistrement en cours" (l'erreur reste
+            # consultable dans tmo.log).
+            if self.recorder.is_recording:
+                return
             if ev.message:
                 self._set_status(f"Erreur : {ev.message}")
             else:
@@ -1463,6 +1471,18 @@ class TmoApp(ctk.CTk):
             carrier_code = None
             if not is_valid_order_id(safe_id):
                 self._set_status("ID commande invalide")
+                return
+            # Un code sans le préfixe du contrat ticket (voir
+            # TicketPrinter/schema/ticket-qr-contract.md) peut être un scan
+            # accidentel (code-barres produit, QR de test) qui tombe par
+            # coïncidence dans la plage de longueur d'un ID commande valide —
+            # on demande confirmation avant de déclencher l'enregistrement.
+            if not messagebox.askyesno(
+                "Code sans préfixe \"Tk-\"",
+                f"Le code \"{raw}\" ne porte pas le préfixe attendu d'un ticket TMO.\n\n"
+                f"Démarrer quand même l'enregistrement pour la commande \"{safe_id}\" ?",
+            ):
+                self._set_status(self._ready_status_text())
                 return
 
         current = self.recorder.recording_order_id
