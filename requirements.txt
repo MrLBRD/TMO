@@ -1,5 +1,5 @@
 # Dépendances directes
-numpy>=2.4.6,<2.5.1
+numpy>=2.5.3,<3
 opencv-python==5.0.0.93
 pyzbar==0.1.9
 pylibdmtx==0.1.10
@@ -12,5 +12,5 @@ pyserial==3.5
 # et pour embarquer des versions corrigées dans l'EXE (cf. pip-audit en CI)
 certifi==2026.7.22
 charset-normalizer==3.5.1
-idna==3.19
-urllib3==2.7.0
+idna==3.20
+urllib3==2.8.0

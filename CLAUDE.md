@@ -40,7 +40,7 @@ chrome_extension/
 
 # Tech Stack
 
-- **Python 3.10+** (typage strict, dataclasses)
+- **Python 3.12+** (typage strict, dataclasses)
 - **CustomTkinter** — GUI moderne dark mode
 - **OpenCV (cv2)** — Capture webcam, encodage MP4, fallback QR
 - **pyzbar** — Détection QR rapide (bibliothèque C) avec fallback OpenCV
@@ -53,7 +53,7 @@ chrome_extension/
 
 # Coding Conventions
 
-- Type hints partout (Python 3.10+, `from __future__ import annotations` si besoin)
+- Type hints partout (Python 3.12+, `from __future__ import annotations` si besoin)
 - Dataclass pour la config (`AppConfig`)
 - Gestion d'erreurs : try/except sur toutes les opérations I/O ; les erreurs ne bloquent jamais l'enregistrement en cours
 - Les opérations lentes (browser, encodage) sont systématiquement déportées dans des threads daemon

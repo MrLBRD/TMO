@@ -8,7 +8,7 @@ Un opérateur scanne le QR code d'un ticket de commande avec une webcam. L'app d
 
 ## Spécifications Techniques
 
-- **Langage :** Python 3.10+
+- **Langage :** Python 3.12+
 - **Plateforme cible :** Windows (développement sur Mac possible)
 - **Matériel :** Webcam Logitech C270 (fixée au-dessus de la table)
 - **Trigger :** QR Code format `Tk-{ORDER_ID}` (5-10 caractères alphanumériques)
