@@ -1663,7 +1663,10 @@ class TmoApp(ctk.CTk):
         # order_id est déjà nettoyé à [A-Za-z0-9_-] ; carrier_code vient de la
         # table canonique (TicketPrinter/schema/ticket-qr-contract.md) — sûrs
         # à interpoler tels quels.
-        url = f"{base.rstrip('/')}/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}"
+        # tmoTab=1 : marqueur permettant à l'extension Chrome de reconnaître
+        # l'onglet comme ouvert par TMO même après que le plugin a retiré
+        # orderCheck de l'URL (après impression de l'étiquette).
+        url = f"{base.rstrip('/')}/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}&tmoTab=1"
         if carrier_code:
             url += f"&carrierCode={carrier_code}"
 

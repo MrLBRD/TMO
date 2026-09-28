@@ -25,7 +25,12 @@
     border-radius: 4px; border: 1px solid #d97706; background: #fff; color: #92400e; cursor: pointer;
   }
   #global-check button:hover { background: #fef3c7; }
-  #refresh-global {
+  #diag {
+    padding: 12px; border-radius: 6px; border: 1px solid #e5e7eb; background: #f9fafb;
+    font-size: 13px; line-height: 1.6;
+  }
+  #diag .err { color: #b91c1c; }
+  #refresh-global, #refresh-diag {
     background: none; border: none; color: #2563eb; font-size: 12px; cursor: pointer;
     text-decoration: underline; padding: 0; margin-top: 6px;
   }
@@ -47,6 +52,10 @@
   </p>
   <div id="global-check">Vérification du raccourci global...</div>
   <button id="refresh-global">Revérifier (après un changement dans Chrome)</button>
+
+  <h1 style="margin-top: 28px;">Diagnostic — fermeture auto des onglets</h1>
+  <div id="diag">Chargement...</div>
+  <button id="refresh-diag">Actualiser</button>
   <script src="options.js"></script>
 </body>
 </html>

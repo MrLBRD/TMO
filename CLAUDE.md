@@ -34,7 +34,7 @@ chrome_extension/
 1. Scan QR code `Tk-{ORDER_ID}` → `_handle_order_id()`
 2. Arrêt de l'enregistrement précédent (si actif)
 3. Démarrage nouvel enregistrement
-4. Ouverture Chrome sur `/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}`
+4. Ouverture Chrome sur `/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}&tmoTab=1[&carrierCode=…]` (`tmoTab=1` : marqueur lu par l'extension, conservé après l'impression contrairement à `orderCheck`)
 5. Extension Chrome ferme les anciens onglets TMO
 6. Prochain scan ou STOP manuel → enregistrement arrêté
 

@@ -180,3 +180,50 @@ refreshBtn.addEventListener("click", checkGlobalShortcut);
 // Revérifie automatiquement au retour sur cet onglet (ex. après avoir remappé
 // la touche dans l'onglet chrome://extensions/shortcuts ouvert à côté).
 window.addEventListener("focus", checkGlobalShortcut);
+
+// Diagnostic de la fermeture auto : permet de vérifier sur le poste
+// d'expédition que l'extension tourne bien dans ce profil Chrome, voit les
+// onglets TMO, et que son dernier passage de nettoyage a réussi.
+const diagEl = document.getElementById("diag");
+const refreshDiagBtn = document.getElementById("refresh-diag");
+
+function diagLine(text, isError) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  if (isError) div.className = "err";
+  diagEl.appendChild(div);
+}
+
+async function renderDiagnostic() {
+  const data = await chrome.storage.local.get(["tmo_tracked_tabs", "tmo_last_cleanup"]);
+  const tracked = data.tmo_tracked_tabs || {};
+  const report = data.tmo_last_cleanup;
+  const tabs = await chrome.tabs.query({});
+  const orderTabs = tabs.filter((t) => {
+    try {
+      const u = new URL(t.url);
+      return u.pathname.endsWith("/wp-admin/admin.php") && u.searchParams.get("page") === "wc-better-management";
+    } catch {
+      return false;
+    }
+  });
+  const windowCount = new Set(orderTabs.map((t) => t.windowId)).size;
+
+  diagEl.textContent = "";
+  diagLine(`Version de l'extension : ${chrome.runtime.getManifest().version}`);
+  diagLine(`Onglets wc-better-management ouverts : ${orderTabs.length} (sur ${windowCount} fenêtre(s))`, orderTabs.length > 1);
+  diagLine(`Onglets suivis par l'extension : ${Object.keys(tracked).length}`);
+  if (!report) {
+    diagLine("Aucun passage de nettoyage enregistré — l'extension n'a encore jamais tourné dans ce profil.", true);
+    return;
+  }
+  diagLine(
+    `Dernier nettoyage : ${new Date(report.at).toLocaleString()} (${report.reason}) — ` +
+      `${report.found} onglet(s) TMO trouvé(s), ${report.closed} fermé(s)`
+  );
+  for (const err of report.errors || []) diagLine(`Erreur : ${err}`, true);
+}
+
+renderDiagnostic();
+refreshDiagBtn.addEventListener("click", renderDiagnostic);
+window.addEventListener("focus", renderDiagnostic);

@@ -2,14 +2,13 @@ const TARGET_PATH = "/wp-admin/admin.php";
 const TARGET_PARAM = "wc-better-management";
 const STORAGE_KEY = "tmo_tracked_tabs";
 const LAST_ORDER_KEY = "tmo_last_order_id";
+const LAST_CLEANUP_KEY = "tmo_last_cleanup";
 
 // Sérialise les opérations qui lisent puis réécrivent chrome.storage.local
 // (trackTab/untrackTab/cleanupTabs). Sans ça, deux scans rapprochés (nouvelle
 // douchette rapide) déclenchent des onCreated/onUpdated quasi simultanés :
 // chacun lit le même état avant que l'autre n'ait écrit, et la dernière
-// écriture gagne — les entrées précédentes du tracking sont perdues et
-// cleanupTabs ne voit alors plus assez d'onglets trackés pour fermer les
-// anciens.
+// écriture gagne — les entrées précédentes du tracking sont perdues.
 let _storageQueue = Promise.resolve();
 function serialized(fn) {
   const run = _storageQueue.then(fn, fn);
@@ -24,6 +23,21 @@ function isTmoOpenUrl(url) {
     return u.pathname.endsWith(TARGET_PATH)
       && u.searchParams.get("page") === TARGET_PARAM
       && !!u.searchParams.get("orderCheck");
+  } catch { return false; }
+}
+
+// Vérifie si une URL porte une marque d'ouverture TMO qui survit à
+// l'impression : le plugin ne retire que orderCheck, pas tmoTab (ajouté par
+// TMO à chaque ouverture) ni carrierCode (ajouté si le ticket le fournit —
+// couvre les onglets ouverts par les versions de TMO antérieures à tmoTab).
+function hasTmoMarker(url) {
+  try {
+    const u = new URL(url);
+    return u.pathname.endsWith(TARGET_PATH)
+      && u.searchParams.get("page") === TARGET_PARAM
+      && (!!u.searchParams.get("orderCheck")
+        || u.searchParams.get("tmoTab") === "1"
+        || !!u.searchParams.get("carrierCode"));
   } catch { return false; }
 }
 
@@ -57,20 +71,49 @@ async function trackTab(tabId, orderId) {
 async function untrackTab(tabId) {
   const data = await chrome.storage.local.get(STORAGE_KEY);
   const tracked = data[STORAGE_KEY] || {};
+  if (!(tabId in tracked)) return;
   delete tracked[tabId];
   await chrome.storage.local.set({ [STORAGE_KEY]: tracked });
 }
 
-// Récupérer les tabs TMO trackées
-async function getTrackedTabs() {
+// Onglets TMO à gérer, triés du plus récent au plus ancien :
+// - tout onglet dont l'URL porte une marque TMO (hasTmoMarker), même s'il n'a
+//   jamais été tracké (event onCreated/onUpdated manqué, onglet restauré...) ;
+// - les onglets trackés restés sur wc-better-management, même si l'URL a
+//   perdu toute marque (ex. navigation entre les onglets internes du plugin).
+// Tout onglet marqué est enregistré au passage dans le tracking : il reste
+// ainsi reconnu plus tard, même une fois ses paramètres retirés de l'URL.
+// Purge aussi du tracking les onglets qui n'existent plus.
+// Note: la permission "tabs" (et non "activeTab") est requise pour lire l'URL
+// de TOUS les onglets via chrome.tabs.query({}), pas seulement l'onglet actif.
+async function getTmoTabs() {
   const data = await chrome.storage.local.get(STORAGE_KEY);
-  const trackedIds = new Set(Object.keys(data[STORAGE_KEY] || {}).map(Number));
-  if (!trackedIds.size) return [];
-
+  const tracked = data[STORAGE_KEY] || {};
   const allTabs = await chrome.tabs.query({});
-  return allTabs.filter(tab =>
-    trackedIds.has(tab.id) && isTargetPage(tab.url)
-  );
+  let dirty = false;
+
+  const existingIds = new Set(allTabs.map(t => String(t.id)));
+  for (const id of Object.keys(tracked)) {
+    if (!existingIds.has(id)) { delete tracked[id]; dirty = true; }
+  }
+
+  const tabs = [];
+  for (const tab of allTabs) {
+    if (tab.id === undefined || tab.pinned) continue;
+    if (hasTmoMarker(tab.url)) {
+      if (!(tab.id in tracked)) { tracked[tab.id] = extractOrderId(tab.url); dirty = true; }
+      tabs.push(tab);
+    } else if (tab.id in tracked && isTargetPage(tab.url)) {
+      tabs.push(tab);
+    }
+  }
+  if (dirty) await chrome.storage.local.set({ [STORAGE_KEY]: tracked });
+
+  // Plus récent d'abord, par tab.id : Chrome l'incrémente à chaque création
+  // d'onglet, et TMO ouvre toujours un nouvel onglet. Ni lastAccessed (dépend
+  // du focus) ni la date de tracking (un scan rapide peut déclencher le
+  // cleanup avant que les onglets suivants soient trackés) ne sont fiables.
+  return tabs.sort((a, b) => b.id - a.id);
 }
 
 // Détermine l'onglet à cibler pour l'impression hors-focus :
@@ -98,46 +141,47 @@ async function findPrintTarget() {
   return pool.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
 }
 
-// Cleanup: ferme les anciennes tabs TMO, garde la plus récente
-async function cleanupTabs() {
-  const targets = await getTrackedTabs();
-  if (targets.length <= 1) return;
+// Cleanup : ferme tous les onglets TMO sauf le plus récent, toutes fenêtres
+// confondues — Chrome ouvre l'URL dans la dernière fenêtre active, qui n'est
+// pas forcément celle des onglets précédents ; un regroupement par fenêtre
+// laissait un onglet par fenêtre s'accumuler. L'onglet conservé garde le
+// navigateur ouvert ; une fenêtre qui ne contenait qu'un ancien onglet TMO se
+// ferme avec lui.
+async function cleanupTabs(reason) {
+  const tabs = await getTmoTabs();
+  const toClose = tabs.slice(1);
+  const errors = [];
 
-  // Grouper par window
-  const byWindow = new Map();
-  for (const tab of targets) {
-    if (!byWindow.has(tab.windowId)) byWindow.set(tab.windowId, []);
-    byWindow.get(tab.windowId).push(tab);
+  // Un onglet à la fois : un échec (ex. "Tabs cannot be edited right now"
+  // pendant un glisser d'onglet) ne doit pas empêcher de fermer les autres —
+  // l'alarme périodique retentera.
+  for (const tab of toClose) {
+    try {
+      await chrome.tabs.remove(tab.id);
+      await untrackTab(tab.id);
+    } catch (err) {
+      errors.push(String((err && err.message) || err));
+    }
   }
 
-  for (const tabs of byWindow.values()) {
-    if (tabs.length <= 1) continue;
-
-    // Trier par lastAccessed desc, garder le premier
-    const sorted = tabs.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
-    const toClose = sorted.slice(1).map(t => t.id).filter(id => id !== undefined);
-
-    if (!toClose.length) continue;
-
-    // Vérifier qu'on ne ferme pas le dernier tab de la window
-    const windowTabs = await chrome.tabs.query({ windowId: sorted[0].windowId });
-    if (windowTabs.length <= toClose.length) continue;
-
-    await chrome.tabs.remove(toClose);
-    // Retirer du tracking
-    for (const id of toClose) await untrackTab(id);
-  }
+  // Dernier passage consultable dans la page Options (diagnostic en prod).
+  const report = {
+    at: Date.now(),
+    reason: reason || "unknown",
+    found: tabs.length,
+    closed: toClose.length - errors.length,
+    errors,
+  };
+  await chrome.storage.local.set({ [LAST_CLEANUP_KEY]: report });
+  if (toClose.length || errors.length) console.info("[TMO] cleanup", report);
 }
 
 // Tracker quand une tab TMO est créée
-// Note: la permission "tabs" (et non "activeTab") est requise car getTrackedTabs()
-// appelle chrome.tabs.query({}) pour retrouver TOUTES les tabs trackées, pas seulement
-// la tab active. L'extension doit fermer les anciennes tabs, pas la tab courante.
 chrome.tabs.onCreated.addListener((tab) => {
   if (tab.url && isTmoOpenUrl(tab.url)) {
     serialized(async () => {
       await trackTab(tab.id, extractOrderId(tab.url));
-      await cleanupTabs();
+      await cleanupTabs("created");
     });
   }
 });
@@ -147,8 +191,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url && isTmoOpenUrl(changeInfo.url)) {
     serialized(async () => {
       await trackTab(tabId, extractOrderId(changeInfo.url));
-      await cleanupTabs();
+      await cleanupTabs("updated");
     });
+  } else if (changeInfo.status === "complete" && hasTmoMarker(tab.url)) {
+    // Filet de sécurité : fin de chargement d'une page TMO (avant toute
+    // impression). Si l'ouverture n'a pas été trackée, on la rattrape ici ;
+    // cleanupTabs enregistre les onglets marqués et ferme les anciens.
+    serialized(() => cleanupTabs("loaded"));
   }
 });
 
@@ -159,9 +208,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // Commandes et autres triggers
 chrome.commands.onCommand.addListener((cmd) => {
-  if (cmd === "cleanup-tabs") serialized(() => cleanupTabs());
+  if (cmd === "cleanup-tabs") serialized(() => cleanupTabs("shortcut"));
 });
-chrome.action.onClicked.addListener(() => serialized(() => cleanupTabs()));
+chrome.action.onClicked.addListener(() => serialized(() => cleanupTabs("action")));
 
 // Raccourci global d'impression (actif même si l'onglet Woo n'a pas le focus).
 // Le canal "onglet actif" (raccourci configurable) est géré directement par
@@ -197,11 +246,18 @@ chrome.commands.onCommand.addListener(async (cmd) => {
     console.warn("[TMO] Échec envoi message impression :", err);
   }
 });
-chrome.runtime.onStartup.addListener(() => serialized(() => cleanupTabs()));
-chrome.runtime.onInstalled.addListener(() => serialized(() => cleanupTabs()));
 
-// Periodic cleanup avec chrome.alarms (plus fiable que setInterval pour service workers)
-chrome.alarms.create("cleanup-tabs", { periodInMinutes: 10 });
+// Au démarrage de Chrome, les tab IDs repartent de zéro : le tracking de la
+// session précédente ne correspond plus à rien (voire à d'autres onglets).
+chrome.runtime.onStartup.addListener(() => serialized(async () => {
+  await chrome.storage.local.remove(STORAGE_KEY);
+  await cleanupTabs("startup");
+}));
+chrome.runtime.onInstalled.addListener(() => serialized(() => cleanupTabs("installed")));
+
+// Filet de sécurité périodique (chrome.alarms : plus fiable que setInterval
+// pour un service worker, qui peut être suspendu).
+chrome.alarms.create("cleanup-tabs", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "cleanup-tabs") serialized(() => cleanupTabs());
+  if (alarm.name === "cleanup-tabs") serialized(() => cleanupTabs("alarm"));
 });
