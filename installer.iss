@@ -2,7 +2,7 @@
 ; Inno Setup Script
 
 #define MyAppName "TMO"
-#define MyAppVersion "1.3.6"
+#define MyAppVersion "1.3.7"
 #define MyAppPublisher "TMO"
 #define MyAppExeName "TMO.exe"
 
