@@ -1,5 +1,5 @@
 # Dépendances directes
-numpy>=2.5.3,<3
+numpy>=2.5.4,<3
 opencv-python==5.0.0.93
 pyzbar==0.1.9
 pylibdmtx==0.1.10
