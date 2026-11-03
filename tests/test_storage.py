@@ -174,3 +174,54 @@ class TestFormatBytes:
 
     def test_ten_gigabytes(self):
         assert format_bytes(10 * 1024 ** 3) == "10.0 Go"
+
+
+# ---------------------------------------------------------------------------
+# clean_old_videos — ne supprime que output/YYYY/MM/DD/*.mp4 anciens
+# ---------------------------------------------------------------------------
+
+import os
+import time
+
+from core.storage import clean_old_videos
+
+
+def _old(path: Path, days: int = 60) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x")
+    t = time.time() - days * 86400
+    os.utime(path, (t, t))
+    return path
+
+
+class TestCleanOldVideos:
+    def test_only_old_mp4_in_dated_tree_deleted(self, tmp_path):
+        out = tmp_path / "out"
+        old_video = _old(out / "2026" / "01" / "02" / "12345.mp4")
+        recent = _old(out / "2026" / "01" / "02" / "67890.mp4", days=1)
+        other_type = _old(out / "2026" / "01" / "02" / "notes.txt")
+        outside = _old(out / "docs" / "a" / "b" / "film.mp4")
+        at_root = _old(out / "root.mp4")
+
+        deleted = clean_old_videos(out, 45)
+
+        assert deleted == [old_video]
+        assert not old_video.exists()
+        for kept in (recent, other_type, outside, at_root):
+            assert kept.exists()
+
+    @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink indisponible")
+    def test_symlinked_dirs_not_followed(self, tmp_path):
+        target = tmp_path / "target"
+        victim = _old(target / "02" / "victim.mp4")
+        out = tmp_path / "out"
+        (out / "2026").mkdir(parents=True)
+        os.symlink(target, out / "2026" / "01", target_is_directory=True)
+
+        assert clean_old_videos(out, 45) == []
+        assert victim.exists()
+
+    def test_retention_zero_treated_as_one_day(self, tmp_path):
+        recent = _old(tmp_path / "2026" / "01" / "02" / "1.mp4", days=0)
+        assert clean_old_videos(tmp_path, 0) == []
+        assert recent.exists()

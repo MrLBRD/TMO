@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import os
 import re
 import shutil
+import stat
 import sys
 
 DEFAULT_RETENTION_DAYS = 45
@@ -123,30 +125,56 @@ def build_video_path(
     return base
 
 
+def _is_link(path: Path) -> bool:
+    """Lien symbolique ou point d'analyse NTFS (jonction) : on ne le suit jamais."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return True
+    return stat.S_ISLNK(st.st_mode) or bool(
+        getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def _subdirs(parent: Path, pattern: str) -> list[Path]:
+    try:
+        return [d for d in parent.iterdir() if re.fullmatch(pattern, d.name) and not _is_link(d) and d.is_dir()]
+    except OSError:
+        return []
+
+
 def clean_old_videos(
     output_dir: Path | None = None,
     retention_days: int = DEFAULT_RETENTION_DAYS,
 ) -> list[Path]:
+    """Supprime uniquement les output/YYYY/MM/DD/*.mp4 plus vieux que retention_days."""
     out = output_dir or default_output_dir()
     if not out.exists():
         return []
 
-    cutoff = datetime.now() - timedelta(days=retention_days)
+    cutoff = datetime.now() - timedelta(days=max(1, retention_days))
     deleted: list[Path] = []
 
-    for path in out.rglob("*"):
-        if not path.is_file():
-            continue
-        try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime)
-        except OSError:
-            continue
-        if mtime < cutoff:
-            try:
-                path.unlink()
-                deleted.append(path)
-            except OSError:
-                continue
+    for year in _subdirs(out, r"\d{4}"):
+        for month in _subdirs(year, r"\d{2}"):
+            for day in _subdirs(month, r"\d{2}"):
+                try:
+                    files = list(day.glob("*.mp4"))
+                except OSError:
+                    continue
+                for path in files:
+                    if _is_link(path) or not path.is_file():
+                        continue
+                    try:
+                        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+                    except OSError:
+                        continue
+                    if mtime < cutoff:
+                        try:
+                            path.unlink()
+                            deleted.append(path)
+                        except OSError:
+                            continue
 
     return deleted
 

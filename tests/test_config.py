@@ -137,3 +137,19 @@ class TestConfigClamping:
             cfg, _ = load_config()
         assert cfg.camera_index == 1
         assert not hasattr(cfg, "unknown_field")
+
+
+class TestRetentionDaysBounds:
+    @pytest.mark.parametrize("raw,expected", [(0, 1), (-5, 1), (99999, 3650), (30, 30)])
+    def test_file_value_clamped(self, tmp_path, raw, expected):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"retention_days": raw}), encoding="utf-8")
+        with patch("core.config.config_path", return_value=config_file):
+            cfg, _ = load_config()
+        assert cfg.retention_days == expected
+
+    def test_env_value_clamped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TMO_RETENTION_DAYS", "0")
+        with patch("core.config.config_path", return_value=tmp_path / "none.json"):
+            cfg, _ = load_config()
+        assert cfg.retention_days == 1

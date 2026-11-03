@@ -8,6 +8,13 @@ import sys
 
 from .storage import default_output_dir, project_root
 
+RETENTION_DAYS_MIN = 1
+RETENTION_DAYS_MAX = 3650
+
+
+def clamp_retention_days(days: int) -> int:
+    return max(RETENTION_DAYS_MIN, min(RETENTION_DAYS_MAX, days))
+
 
 VALID_INPUT_MODES = ("camera", "external_scanner_keyboard", "external_scanner_serial")
 
@@ -97,7 +104,7 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
     retention_days = os.environ.get("TMO_RETENTION_DAYS")
     if retention_days is not None and retention_days.strip() != "":
         try:
-            cfg.retention_days = int(retention_days)
+            cfg.retention_days = clamp_retention_days(int(retention_days))
         except ValueError:
             pass
 
@@ -177,7 +184,7 @@ def load_config() -> tuple[AppConfig, str | None]:
                         pass
                 if "retention_days" in data:
                     try:
-                        cfg.retention_days = int(data["retention_days"])
+                        cfg.retention_days = clamp_retention_days(int(data["retention_days"]))
                     except Exception:
                         pass
                 if "max_recording_minutes" in data:
