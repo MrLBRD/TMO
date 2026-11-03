@@ -33,7 +33,7 @@ SIGNATURE_ASSET_NAME = SHA256_ASSET_NAME + ".sig"
 # La clé privée n'existe que dans le secret GitHub TMO_SIGNING_KEY ; la CI
 # refuse de builder si la signature produite ne se vérifie pas avec cette clé.
 # Générer la paire : python release_signing.py keygen (voir release_signing.py).
-UPDATE_SIGNING_PUBLIC_KEY = ""
+UPDATE_SIGNING_PUBLIC_KEY = "hpSa+vBbrm14ZgNGBc1S7PGHTcJ2suBqbrdFgYik2C4="
 
 # Hosts autorisés pour le téléchargement de l'installateur et de son SHA256.
 # Defense-in-depth : même si la réponse de l'API GitHub était manipulée, on
