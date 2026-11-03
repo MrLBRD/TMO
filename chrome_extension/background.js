@@ -3,6 +3,17 @@ const TARGET_PARAM = "wc-better-management";
 const STORAGE_KEY = "tmo_tracked_tabs";
 const LAST_ORDER_KEY = "tmo_last_order_id";
 const LAST_CLEANUP_KEY = "tmo_last_cleanup";
+// Sites dont les onglets sont suivis (protocole + hôte, port libre pour le labo
+// local). Garder en phase avec "matches" dans manifest.json.
+const ALLOWED_SITES = new Set([
+  "https://univers-crampons.fr",
+  "https://www.univers-crampons.fr",
+  "http://localhost",
+]);
+
+function isAllowedAdminUrl(u) {
+  return ALLOWED_SITES.has(`${u.protocol}//${u.hostname}`) && u.pathname === TARGET_PATH;
+}
 
 // Sérialise les opérations qui lisent puis réécrivent chrome.storage.local
 // (trackTab/untrackTab/cleanupTabs). Sans ça, deux scans rapprochés (nouvelle
@@ -20,7 +31,7 @@ function serialized(fn) {
 function isTmoOpenUrl(url) {
   try {
     const u = new URL(url);
-    return u.pathname.endsWith(TARGET_PATH)
+    return isAllowedAdminUrl(u)
       && u.searchParams.get("page") === TARGET_PARAM
       && !!u.searchParams.get("orderCheck");
   } catch { return false; }
@@ -33,7 +44,7 @@ function isTmoOpenUrl(url) {
 function hasTmoMarker(url) {
   try {
     const u = new URL(url);
-    return u.pathname.endsWith(TARGET_PATH)
+    return isAllowedAdminUrl(u)
       && u.searchParams.get("page") === TARGET_PARAM
       && (!!u.searchParams.get("orderCheck")
         || u.searchParams.get("tmoTab") === "1"
@@ -45,7 +56,7 @@ function hasTmoMarker(url) {
 function isTargetPage(url) {
   try {
     const u = new URL(url);
-    return u.pathname.endsWith(TARGET_PATH)
+    return isAllowedAdminUrl(u)
       && u.searchParams.get("page") === TARGET_PARAM;
   } catch { return false; }
 }

@@ -16,7 +16,11 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*/wp-admin/admin.php*"],
+      "matches": [
+        "https://univers-crampons.fr/wp-admin/admin.php*",
+        "https://www.univers-crampons.fr/wp-admin/admin.php*",
+        "http://localhost/wp-admin/admin.php*"
+      ],
       "js": ["content_script.js"],
       "run_at": "document_idle"
     }
