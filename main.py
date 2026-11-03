@@ -470,6 +470,7 @@ class ConfigWindow(ctk.CTkToplevel):
             if info.download_url:
                 self._pending_download_url = info.download_url
                 self._pending_sha256_url = info.sha256_url
+                self._pending_signature_url = info.signature_url
                 self.update_button.configure(
                     state="normal",
                     text="Télécharger",
@@ -493,6 +494,7 @@ class ConfigWindow(ctk.CTkToplevel):
         if not url:
             return
         sha256_url = getattr(self, "_pending_sha256_url", None)
+        signature_url = getattr(self, "_pending_signature_url", None)
 
         self.update_button.configure(state="disabled", text="Téléchargement...")
         self.update_status_label.configure(text="Téléchargement en cours...", text_color="#9ca3af")
@@ -503,7 +505,9 @@ class ConfigWindow(ctk.CTkToplevel):
                 self.after(0, lambda p=percent: self._update_download_progress(p))
 
         def do_download() -> None:
-            success, result = download_update(url, progress_callback, sha256_url=sha256_url)
+            success, result = download_update(
+                url, progress_callback, sha256_url=sha256_url, signature_url=signature_url
+            )
             self.after(0, lambda: self._handle_download_result(success, result))
 
         threading.Thread(target=do_download, name="tmo_download_update", daemon=True).start()
@@ -526,8 +530,8 @@ class ConfigWindow(ctk.CTkToplevel):
             )
             self.update_button.configure(state="disabled", text="Installation...")
 
-            # Launch installer after short delay
-            self.after(500, lambda: self._run_installer(result))
+            # Lancement immédiat : pas de fenêtre entre la vérification et l'exécution
+            self._run_installer(result)
         else:
             self.update_status_label.configure(
                 text=f"Échec: {result}", text_color="#ef4444"
@@ -1821,6 +1825,11 @@ def smoke_test() -> None:
         ("customtkinter", "import customtkinter"),
         ("pyzbar", "from pyzbar.pyzbar import decode"),
         ("requests", "import requests"),
+        (
+            "cryptography.ed25519",
+            "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; "
+            "Ed25519PrivateKey.generate().sign(b'x')",
+        ),
     ]
 
     for name, stmt in checks:

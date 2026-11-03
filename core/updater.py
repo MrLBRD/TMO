@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import logging
 import os
@@ -15,6 +17,8 @@ from pathlib import Path
 from typing import Callable
 
 import requests
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
@@ -22,6 +26,14 @@ log = logging.getLogger(__name__)
 GITHUB_REPO = "MrLBRD/TMO"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 INSTALLER_ASSET_NAME = "TMO_Setup.exe"
+SHA256_ASSET_NAME = INSTALLER_ASSET_NAME + ".sha256"
+SIGNATURE_ASSET_NAME = SHA256_ASSET_NAME + ".sig"
+
+# Clé publique ed25519 (32 octets, base64) qui signe TMO_Setup.exe.sha256.
+# La clé privée n'existe que dans le secret GitHub TMO_SIGNING_KEY ; la CI
+# refuse de builder si la signature produite ne se vérifie pas avec cette clé.
+# Générer la paire : python release_signing.py keygen (voir release_signing.py).
+UPDATE_SIGNING_PUBLIC_KEY = ""
 
 # Hosts autorisés pour le téléchargement de l'installateur et de son SHA256.
 # Defense-in-depth : même si la réponse de l'API GitHub était manipulée, on
@@ -50,6 +62,7 @@ class UpdateInfo:
     latest_version: str | None = None
     download_url: str | None = None
     sha256_url: str | None = None
+    signature_url: str | None = None
     release_notes: str | None = None
     error: str | None = None
 
@@ -106,16 +119,18 @@ def check_for_updates(current_version: str, timeout: float = 5.0) -> UpdateInfo:
                 error="Version non trouvée dans la release",
             )
 
-        # Find the installer and SHA256 assets
+        # Find the installer, SHA256 and signature assets
         download_url = None
         sha256_url = None
-        sha256_asset_name = (INSTALLER_ASSET_NAME + ".sha256").lower()
+        signature_url = None
         for asset in data.get("assets", []):
             name = asset.get("name", "").lower()
             if name == INSTALLER_ASSET_NAME.lower():
                 download_url = asset.get("browser_download_url")
-            elif name == sha256_asset_name:
+            elif name == SHA256_ASSET_NAME.lower():
                 sha256_url = asset.get("browser_download_url")
+            elif name == SIGNATURE_ASSET_NAME.lower():
+                signature_url = asset.get("browser_download_url")
 
         # Check if update is available
         update_available = is_newer_version(current_version, latest_version)
@@ -130,6 +145,7 @@ def check_for_updates(current_version: str, timeout: float = 5.0) -> UpdateInfo:
             latest_version=latest_version,
             download_url=download_url,
             sha256_url=sha256_url,
+            signature_url=signature_url,
             release_notes=data.get("body"),
         )
 
@@ -163,26 +179,74 @@ def check_for_updates(current_version: str, timeout: float = 5.0) -> UpdateInfo:
         )
 
 
+def verify_sha256_signature(sha256_bytes: bytes, signature_b64: bytes, public_key_b64: str) -> bool:
+    """True si signature_b64 est une signature ed25519 valide de sha256_bytes."""
+    try:
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64, validate=True))
+        key.verify(base64.b64decode(signature_b64.strip(), validate=True), sha256_bytes)
+        return True
+    except (InvalidSignature, ValueError, binascii.Error):
+        return False
+
+
+def _fetch_small(url: str, timeout: float = 10.0, max_bytes: int = 4096) -> bytes:
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    if len(response.content) > max_bytes:
+        raise ValueError("fichier trop volumineux")
+    return response.content
+
+
 def download_update(
     download_url: str,
     progress_callback: Callable[[int, int], None] | None = None,
     timeout: float = 60.0,
     sha256_url: str | None = None,
+    signature_url: str | None = None,
 ) -> tuple[bool, str]:
     """
-    Download the update installer.
+    Download the update installer, after checking the signed SHA256.
 
-    Args:
-        download_url: URL to download the installer
-        progress_callback: Optional callback(bytes_downloaded, total_bytes)
-        timeout: Request timeout in seconds
+    Le .sha256 doit porter une signature ed25519 valide (clé embarquée) et
+    l'installateur doit correspondre à ce hash ; sinon rien n'est conservé.
 
     Returns:
         Tuple of (success, path_or_error_message)
     """
-    if not _is_allowed_update_url(download_url):
-        log.error("update_download_blocked_url url_host=%s", urlparse(download_url or "").hostname)
-        return False, "URL de téléchargement non autorisée (hors GitHub)"
+    for url in (download_url, sha256_url, signature_url):
+        if not _is_allowed_update_url(url):
+            log.error("update_download_blocked_url url_host=%s", urlparse(url or "").hostname)
+            return False, "Mise à jour refusée : fichier de vérification absent ou hors GitHub"
+
+    try:
+        sha256_bytes = _fetch_small(sha256_url)  # type: ignore[arg-type]
+        signature = _fetch_small(signature_url)  # type: ignore[arg-type]
+    except Exception as e:
+        log.error("update_verification_fetch_failed error=%s", e)
+        return False, f"Impossible de récupérer les fichiers de vérification : {e}"
+
+    if not verify_sha256_signature(sha256_bytes, signature, UPDATE_SIGNING_PUBLIC_KEY):
+        log.error("update_signature_invalid")
+        return False, "Signature de la mise à jour invalide — installation refusée"
+
+    try:
+        expected_hash = sha256_bytes.decode("ascii").strip().split()[0].lower()
+    except Exception:
+        return False, "Fichier de hash illisible"
+
+    # Dossier à nom aléatoire (mkdtemp) : pas de nom prévisible dans %TEMP%.
+    temp_dir = tempfile.mkdtemp(prefix="tmo_update_")
+    installer_path = os.path.join(temp_dir, INSTALLER_ASSET_NAME)
+
+    def _discard() -> None:
+        try:
+            os.unlink(installer_path)
+        except OSError:
+            pass
+        try:
+            os.rmdir(temp_dir)
+        except OSError:
+            pass
 
     try:
         response = requests.get(download_url, stream=True, timeout=timeout)
@@ -190,65 +254,46 @@ def download_update(
 
         total_size = int(response.headers.get("content-length", 0))
 
-        # Create temp file for installer
-        temp_dir = tempfile.gettempdir()
-        installer_path = os.path.join(temp_dir, "TMO_Setup_Update.exe")
-
+        # Hash calculé pendant l'écriture : on ne relit pas le fichier sur disque.
+        digest = hashlib.sha256()
         downloaded = 0
-        with open(installer_path, "wb") as f:
+        with open(installer_path, "xb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+                    digest.update(chunk)
                     downloaded += len(chunk)
                     if progress_callback:
                         progress_callback(downloaded, total_size)
 
-        if sha256_url:
-            if not _is_allowed_update_url(sha256_url):
-                log.error("update_sha256_blocked_url url_host=%s", urlparse(sha256_url).hostname)
-                try:
-                    os.unlink(installer_path)
-                except OSError:
-                    pass
-                return False, "URL du hash de vérification non autorisée (hors GitHub)"
-            try:
-                sha256_response = requests.get(sha256_url, timeout=10)
-                sha256_response.raise_for_status()
-                expected_hash = sha256_response.text.strip().split()[0].lower()
-            except Exception as e:
-                log.error("update_sha256_fetch_failed error=%s", e)
-                try:
-                    os.unlink(installer_path)
-                except OSError:
-                    pass
-                return False, f"Impossible de récupérer le hash de vérification : {e}"
-
-            actual_hash = hashlib.sha256(Path(installer_path).read_bytes()).hexdigest()
-            if actual_hash != expected_hash:
-                log.error("update_integrity_failed expected=%s actual=%s", expected_hash, actual_hash)
-                try:
-                    os.unlink(installer_path)
-                except OSError:
-                    pass
-                return False, "Vérification d'intégrité échouée — installateur potentiellement altéré"
+        actual_hash = digest.hexdigest()
+        if actual_hash != expected_hash:
+            log.error("update_integrity_failed expected=%s actual=%s", expected_hash, actual_hash)
+            _discard()
+            return False, "Vérification d'intégrité échouée — installateur potentiellement altéré"
 
         log.info("update_download_complete path=%s bytes=%d", installer_path, downloaded)
         return True, installer_path
 
     except requests.exceptions.Timeout:
         log.warning("update_download_failed error=timeout")
+        _discard()
         return False, "Délai d'attente dépassé lors du téléchargement"
     except requests.exceptions.ConnectionError:
         log.warning("update_download_failed error=connection_error")
+        _discard()
         return False, "Connexion perdue pendant le téléchargement"
     except requests.exceptions.RequestException as e:
         log.warning("update_download_failed error=%s", e)
+        _discard()
         return False, f"Erreur de téléchargement: {e}"
     except OSError as e:
         log.error("update_download_write_error error=%s", e)
+        _discard()
         return False, f"Erreur d'écriture: {e}"
     except Exception as e:
         log.error("update_download_error error=%s", e)
+        _discard()
         return False, f"Erreur: {e}"
 
 

@@ -13,7 +13,7 @@ core/
   storage.py         — Gestion fichiers : chemins, nettoyage rétention, espace disque
   config.py          — Chargement/sauvegarde config JSON, surcharge par variables d'env
   logging_setup.py   — RotatingFileHandler (1 MB × 3 backups, tmo.log)
-  updater.py         — Auto-update via GitHub Releases (télécharge TMO_Setup.exe, vérifie SHA256)
+  updater.py         — Auto-update via GitHub Releases (vérifie la signature ed25519 du .sha256, puis le SHA256 de TMO_Setup.exe)
 chrome_extension/
   background.js      — Service worker MV3 : suit les onglets TMO ouverts, ferme les anciens ;
                         relaie le raccourci global d'impression (chrome.commands) vers l'onglet actif
@@ -74,7 +74,9 @@ TMO/
 ├── TMO.spec                 # Configuration PyInstaller
 ├── installer.iss            # Configuration Inno Setup (version FR+EN)
 ├── build_win.py             # Script de build Windows
-├── requirements.txt         # Dépendances Python (versions épinglées avec ==)
+├── requirements.in          # Dépendances directes
+├── requirements.txt         # Lock haché (uv pip compile --generate-hashes)
+├── release_signing.py       # Clé et signature ed25519 des releases
 └── output/                  # Vidéos enregistrées (YYYY/MM/DD/{ORDER_ID}.mp4) — gitignore
 ```
 
@@ -82,7 +84,7 @@ TMO/
 
 ```bash
 # Développement local
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.txt
 python main.py
 
 # Build Windows (depuis Windows ou GitHub Actions)
@@ -101,7 +103,8 @@ Les trois fichiers suivants doivent toujours être synchronisés sur la même ve
 git commit -m "chore: bump version to X.Y.Z"
 git tag vX.Y.Z
 git push origin main && git push origin vX.Y.Z
-# GitHub Actions crée automatiquement la release avec TMO_Setup.exe et TMO_Setup.exe.sha256
+# GitHub Actions crée automatiquement la release avec TMO_Setup.exe, TMO_Setup.exe.sha256
+# et TMO_Setup.exe.sha256.sig (signé avec le secret TMO_SIGNING_KEY, voir release_signing.py)
 ```
 
 # Configuration
@@ -131,6 +134,6 @@ Toutes les clés sont surchargeables par variables d'environnement `TMO_*`.
 - **Dead man's switch** : si `max_recording_minutes > 0`, un dialogue de confirmation apparaît à l'expiration — l'enregistrement s'arrête automatiquement après 60s sans réponse
 - **Espace disque** : alerte rouge < 2 Go, orange < 10 Go ; la rétention se nettoie au démarrage et à chaque sauvegarde de config
 - **Extension Chrome** : installée en mode non-packagé (dossier `chrome_extension/`) — l'utilisateur doit la recharger manuellement après une mise à jour de l'app
-- **Intégrité des mises à jour** : la CI publie `TMO_Setup.exe.sha256` ; `download_update()` vérifie le SHA256 avant de retourner le chemin de l'installateur
-- **Dépendances épinglées** : toutes les dépendances Python dans `requirements.txt` sont épinglées avec `==` ; toutes les actions GitHub sont épinglées par SHA complet
+- **Intégrité des mises à jour** : la CI publie `TMO_Setup.exe.sha256` et sa signature ed25519 `TMO_Setup.exe.sha256.sig` (secret `TMO_SIGNING_KEY`) ; `download_update()` refuse tout installateur sans signature valide pour `UPDATE_SIGNING_PUBLIC_KEY` ou dont le SHA256 diffère, télécharge dans un dossier `mkdtemp` et l'installateur est lancé aussitôt. Changer de clé = nouvelle clé publique dans `core/updater.py` + nouveau secret, dans la même release
+- **Dépendances épinglées** : `requirements.in` liste les dépendances directes (runtime + build + CI) ; `requirements.txt` est le lock haché généré par `uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes -o requirements.txt`, installé partout avec `pip install --require-hashes -r requirements.txt` ; `pip-audit` bloque la CI ; toutes les actions GitHub sont épinglées par SHA complet
 - **QR scanner** : `_qr_available` n'est mis à `False` qu'après `_QR_ERROR_THRESHOLD` (10) exceptions consécutives — un succès remet le compteur à zéro

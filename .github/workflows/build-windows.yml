@@ -24,25 +24,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libzbar0 libdmtx0t64 libglib2.0-0
+        run: sudo apt-get update && sudo apt-get install -y libzbar0 libdmtx0t64 libglib2.0-0 libgl1
 
-      - name: Install Python dependencies
-        run: |
-          pip install pytest
-          pip install "numpy>=2.0,<3" "opencv-python-headless==5.0.0.93"
-          pip install pyzbar==0.1.9 pylibdmtx==0.1.10 pillow==13.0.0 requests==2.34.2
+      - name: Install Python dependencies (lock haché)
+        run: python -m pip install --require-hashes -r requirements.txt
 
       - name: Run tests
         run: pytest tests/ -v
 
-      - name: Audit dependencies (pip-audit)
-        # Non bloquant pour l'instant : signale les CVE des dépendances (directes
-        # et transitives) sans casser la release. Retirer continue-on-error pour
-        # en faire un gate strict une fois le bruit maîtrisé.
-        continue-on-error: true
-        run: |
-          pip install pip-audit
-          pip-audit -r requirements.txt
+      - name: Audit dependencies (pip-audit, bloquant)
+        run: pip-audit -r requirements.txt --require-hashes --disable-pip
 
   build:
     needs: test
@@ -61,15 +52,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Install dependencies (lock haché, pip et PyInstaller compris)
+        run: python -m pip install --require-hashes -r requirements.txt
 
       - name: Build with PyInstaller
-        run: |
-          pip install "pyinstaller==6.22.3"
-          pyinstaller TMO.spec
+        run: pyinstaller TMO.spec
 
       - name: Smoke test EXE (imports critiques)
         run: dist\TMO.exe --smoke-test
@@ -83,6 +70,13 @@ jobs:
           $hash = Get-FileHash dist/TMO_Setup.exe -Algorithm SHA256
           "$($hash.Hash.ToLower())  TMO_Setup.exe" | Out-File -FilePath dist/TMO_Setup.exe.sha256 -Encoding ASCII -NoNewline
 
+      - name: Sign SHA256 (ed25519)
+        # Échoue si le secret manque ou ne correspond pas à la clé publique
+        # embarquée (core/updater.py) : aucune release ne part sans .sig valide.
+        env:
+          TMO_SIGNING_KEY: ${{ secrets.TMO_SIGNING_KEY }}
+        run: python release_signing.py sign dist/TMO_Setup.exe.sha256
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -90,6 +84,7 @@ jobs:
           path: |
             dist/TMO_Setup.exe
             dist/TMO_Setup.exe.sha256
+            dist/TMO_Setup.exe.sha256.sig
 
   release:
     needs: build
@@ -111,6 +106,7 @@ jobs:
           files: |
             dist/TMO_Setup.exe
             dist/TMO_Setup.exe.sha256
+            dist/TMO_Setup.exe.sha256.sig
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
