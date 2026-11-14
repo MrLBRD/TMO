@@ -225,3 +225,16 @@ class TestCleanOldVideos:
         recent = _old(tmp_path / "2026" / "01" / "02" / "1.mp4", days=0)
         assert clean_old_videos(tmp_path, 0) == []
         assert recent.exists()
+
+    @pytest.mark.skipif(os.name != "nt", reason="jonction NTFS : Windows seulement (job build de la CI)")
+    def test_ntfs_junction_not_followed(self, tmp_path):
+        import subprocess
+
+        target = tmp_path / "target"
+        victim = _old(target / "02" / "victim.mp4")
+        out = tmp_path / "out"
+        (out / "2026").mkdir(parents=True)
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(out / "2026" / "01"), str(target)], check=True)
+
+        assert clean_old_videos(out, 45) == []
+        assert victim.exists()

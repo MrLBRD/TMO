@@ -55,6 +55,9 @@ jobs:
       - name: Install dependencies (lock haché, pip et PyInstaller compris)
         run: python -m pip install --require-hashes -r requirements.txt
 
+      - name: Test jonction NTFS (rétention, Windows seulement)
+        run: python -m pytest tests/test_storage.py -k junction -v -rs
+
       - name: Build with PyInstaller
         run: pyinstaller TMO.spec
 

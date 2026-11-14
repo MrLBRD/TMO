@@ -153,3 +153,20 @@ class TestRetentionDaysBounds:
         with patch("core.config.config_path", return_value=tmp_path / "none.json"):
             cfg, _ = load_config()
         assert cfg.retention_days == 1
+
+
+class TestLoadBounds:
+    def test_site_url_without_scheme_gets_https(self):
+        from core.config import clean_site_url
+
+        assert clean_site_url(" univers-crampons.fr ") == "https://univers-crampons.fr"
+        assert clean_site_url("--disable-web-security") == "https://--disable-web-security"
+        assert clean_site_url("http://localhost:8101") == "http://localhost:8101"
+        assert clean_site_url("") == ""
+
+    def test_max_recording_minutes_bounded(self):
+        from core.config import clamp_max_recording_minutes
+
+        assert clamp_max_recording_minutes(-5) == 0
+        assert clamp_max_recording_minutes(15) == 15
+        assert clamp_max_recording_minutes(10**9) == 1440

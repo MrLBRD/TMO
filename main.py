@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.3.8"
+__version__ = "1.3.9"
 
 import ctypes
 from ctypes import wintypes
@@ -35,7 +35,7 @@ from core.storage import (
     parse_qr_value,
     sanitize_order_id,
 )
-from core.updater import UpdateInfo, check_for_updates_async, download_update, run_installer
+from core.updater import prepare_update, run_installer
 
 import logging
 log = logging.getLogger(__name__)
@@ -308,13 +308,6 @@ class ConfigWindow(ctk.CTkToplevel):
         )
         self.version_label = ctk.CTkLabel(self._scroll, text=f"v{__version__}", anchor="w")
         self.version_label.grid(row=20, column=1, sticky="w", padx=12, pady=6)
-        self.update_button = ctk.CTkButton(
-            self._scroll, text="Vérifier MAJ", width=100, command=self._check_for_updates
-        )
-        self.update_button.grid(row=20, column=2, sticky="e", padx=12, pady=6)
-
-        self.update_status_label = ctk.CTkLabel(self._scroll, text="", anchor="w")
-        self.update_status_label.grid(row=21, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
 
         self._refresh_serial_ports(preselect=config.scanner_serial_port)
         self._apply_input_mode_state(config.input_mode)
@@ -439,121 +432,6 @@ class ConfigWindow(ctk.CTkToplevel):
                 self.chrome_status_label.configure(text="Non Windows", text_color="#9ca3af")
         except Exception:
             self.chrome_status_label.configure(text="Erreur détection", text_color="#9ca3af")
-
-    def _check_for_updates(self) -> None:
-        """Check for updates in background."""
-        self.update_button.configure(state="disabled", text="Vérification...")
-        self.update_status_label.configure(text="Connexion à GitHub...", text_color="#9ca3af")
-
-        def on_result(info: UpdateInfo) -> None:
-            self.after(0, lambda: self._handle_update_result(info))
-
-        check_for_updates_async(__version__, on_result)
-
-    def _handle_update_result(self, info: UpdateInfo) -> None:
-        """Handle update check result."""
-        if not self.winfo_exists():
-            return
-
-        if info.error:
-            self.update_status_label.configure(
-                text=f"Erreur: {info.error}", text_color="#ef4444"
-            )
-            self.update_button.configure(state="normal", text="Vérifier MAJ")
-            return
-
-        if info.available and info.latest_version:
-            self.update_status_label.configure(
-                text=f"Nouvelle version disponible: v{info.latest_version}",
-                text_color="#10b981",
-            )
-            if info.download_url:
-                self._pending_download_url = info.download_url
-                self._pending_sha256_url = info.sha256_url
-                self._pending_signature_url = info.signature_url
-                self.update_button.configure(
-                    state="normal",
-                    text="Télécharger",
-                    command=self._download_update,
-                )
-            else:
-                self.update_status_label.configure(
-                    text=f"v{info.latest_version} disponible (téléchargez sur GitHub)",
-                    text_color="#f59e0b",
-                )
-                self.update_button.configure(state="normal", text="Vérifier MAJ")
-        else:
-            self.update_status_label.configure(
-                text=f"Vous êtes à jour (v{__version__})", text_color="#10b981"
-            )
-            self.update_button.configure(state="normal", text="Vérifier MAJ")
-
-    def _download_update(self) -> None:
-        """Download and install update."""
-        url = getattr(self, "_pending_download_url", None)
-        if not url:
-            return
-        sha256_url = getattr(self, "_pending_sha256_url", None)
-        signature_url = getattr(self, "_pending_signature_url", None)
-
-        self.update_button.configure(state="disabled", text="Téléchargement...")
-        self.update_status_label.configure(text="Téléchargement en cours...", text_color="#9ca3af")
-
-        def progress_callback(downloaded: int, total: int) -> None:
-            if total > 0:
-                percent = int((downloaded / total) * 100)
-                self.after(0, lambda p=percent: self._update_download_progress(p))
-
-        def do_download() -> None:
-            success, result = download_update(
-                url, progress_callback, sha256_url=sha256_url, signature_url=signature_url
-            )
-            self.after(0, lambda: self._handle_download_result(success, result))
-
-        threading.Thread(target=do_download, name="tmo_download_update", daemon=True).start()
-
-    def _update_download_progress(self, percent: int) -> None:
-        """Update download progress in UI."""
-        if not self.winfo_exists():
-            return
-        self.update_status_label.configure(text=f"Téléchargement: {percent}%")
-
-    def _handle_download_result(self, success: bool, result: str) -> None:
-        """Handle download completion."""
-        if not self.winfo_exists():
-            return
-
-        if success:
-            self.update_status_label.configure(
-                text="Téléchargement terminé. Lancement de l'installation...",
-                text_color="#10b981",
-            )
-            self.update_button.configure(state="disabled", text="Installation...")
-
-            # Lancement immédiat : pas de fenêtre entre la vérification et l'exécution
-            self._run_installer(result)
-        else:
-            self.update_status_label.configure(
-                text=f"Échec: {result}", text_color="#ef4444"
-            )
-            self.update_button.configure(
-                state="normal", text="Réessayer", command=self._download_update
-            )
-
-    def _run_installer(self, installer_path: str) -> None:
-        """Run the installer and exit."""
-        success, error = run_installer(installer_path)
-        if success:
-            self.update_status_label.configure(
-                text="Fermeture de l'application...", text_color="#10b981"
-            )
-            # Exit application after installer starts
-            self.after(1000, lambda: sys.exit(0))
-        else:
-            self.update_status_label.configure(
-                text=f"Erreur: {error}", text_color="#ef4444"
-            )
-            self.update_button.configure(state="normal", text="Vérifier MAJ")
 
     def _start_calibration(self) -> None:
         if not self._recorder.qr_available:
@@ -1171,6 +1049,9 @@ class DeadManSwitchDialog(ctk.CTkToplevel):
                 pass
 
 
+UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+
 class TmoApp(ctk.CTk):
     def __init__(self, recorder: Recorder, config: AppConfig) -> None:
         super().__init__()
@@ -1241,6 +1122,16 @@ class TmoApp(ctk.CTk):
         self.disk_label = ctk.CTkLabel(bottom, text="", anchor="w")
         self.disk_label.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
 
+        # Mise à jour automatique : bouton affiché seulement quand l'installateur est prêt
+        # (pas de fenêtre : elle volerait le focus de la douchette clavier).
+        self.update_label = ctk.CTkLabel(bottom, text="", anchor="w", text_color="#9ca3af")
+        self.update_button = ctk.CTkButton(
+            bottom, text="Installer", width=90, command=self._on_install_update_clicked
+        )
+        self._update_events: queue.Queue[tuple[str | None, str]] = queue.Queue()
+        self._update_installer: str | None = None
+        self._update_silent: bool = True  # à la fermeture : sans assistant
+
         self._photo: CTkImage | None = None
         self._config_window: ConfigWindow | None = None
         self._disk_check_after_id: str | None = None
@@ -1272,6 +1163,8 @@ class TmoApp(ctk.CTk):
         self.after(100, self._poll_events)
         self.after(400, self._refocus_scanner_entry)
         self.after(50, self._poll_serial_scanner)
+        if getattr(sys, "frozen", False):  # pas en développement (python main.py)
+            self.after(5000, self._auto_update_check)
 
     def _set_status(self, text: str) -> None:
         self.status_label.configure(text=text)
@@ -1359,6 +1252,11 @@ class TmoApp(ctk.CTk):
             while True:
                 ev = self.recorder.events.get_nowait()
                 self._handle_event(ev)
+        except queue.Empty:
+            pass
+
+        try:
+            self._on_update_result(*self._update_events.get_nowait())
         except queue.Empty:
             pass
 
@@ -1643,6 +1541,36 @@ class TmoApp(ctk.CTk):
         self._set_status(self._ready_status_text())
         self._update_disk_label()
 
+    def _auto_update_check(self) -> None:
+        """Au lancement puis une fois par jour, tant qu'aucune mise à jour n'attend."""
+        if self._closing or self._update_installer:
+            return
+        self.after(UPDATE_CHECK_INTERVAL_MS, self._auto_update_check)
+        threading.Thread(
+            target=lambda: self._update_events.put(prepare_update(__version__)),
+            name="tmo_auto_update",
+            daemon=True,
+        ).start()
+
+    def _on_update_result(self, installer_path: str | None, message: str) -> None:
+        if installer_path:
+            self._update_installer = installer_path
+            self.update_button.grid(row=4, column=2, sticky="e", padx=12, pady=(0, 12))
+        self.update_label.configure(
+            text=message, text_color="#10b981" if installer_path else "#9ca3af"
+        )
+        if message:
+            self.update_label.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        else:
+            self.update_label.grid_remove()
+
+    def _on_install_update_clicked(self) -> None:
+        if self.recorder.is_recording:
+            self.update_label.configure(text="Préparation en cours : installation à la fermeture")
+            return
+        self._update_silent = False  # assistant normal, TMO relancé à la fin
+        self._on_close()
+
     def _on_stop_clicked(self) -> None:
         self.recorder.stop_recording(wait=False)
 
@@ -1656,6 +1584,11 @@ class TmoApp(ctk.CTk):
                     pass
             self.recorder.stop()
             self._stop_serial_scanner()
+            # Enregistrement arrêté : jamais d'installation pendant une préparation.
+            if self._update_installer:
+                ok, error = run_installer(self._update_installer, silent=self._update_silent)
+                if not ok:
+                    log.error("update_install_failed error=%s", error)
         finally:
             self.destroy()
 

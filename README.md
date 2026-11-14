@@ -115,17 +115,18 @@ git tag vX.Y.Z
 git push origin main && git push origin vX.Y.Z
 ```
 
-GitHub Actions détecte le tag `v*` → build PyInstaller + Inno Setup → release GitHub avec `TMO_Setup.exe` et `TMO_Setup.exe.sha256`.
+GitHub Actions détecte le tag `v*` → build PyInstaller + Inno Setup → release GitHub avec `TMO_Setup.exe`, `TMO_Setup.exe.sha256` et `TMO_Setup.exe.sha256.sig`.
 
-### Mise à jour in-app
+### Mise à jour automatique
 
-1. Clic **"Vérifier MAJ"** dans la fenêtre Configuration → interroge l'API GitHub Releases
-2. Si version distante > `__version__` → bouton de téléchargement
-3. `TMO_Setup.exe` téléchargé dans le dossier temp, **SHA256 vérifié** avant exécution
-4. L'installateur se lance en processus détaché — l'app se ferme
-5. Au prochain démarrage, notification "mise à jour effectuée"
+1. Au lancement (après 5 s) puis toutes les 24 h, l'app interroge l'API GitHub Releases (EXE installé seulement, pas `python main.py`)
+2. Si version distante > `__version__` : téléchargement en arrière-plan, **signature ed25519 du `.sha256` puis SHA256 vérifiés** ; hôtes GitHub seulement, redirections comprises, 512 Mo au plus
+3. Bas de la fenêtre : « Mise à jour vX prête : installée à la fermeture » + bouton **Installer**
+4. **Installer** (refusé pendant un enregistrement) ou fermeture de l'app : enregistrement arrêté, hash revérifié, installateur lancé (`/SILENT` à la fermeture) ; UAC demandé
+5. Échec réseau ou signature : rien d'installé, message court en bas de la fenêtre
+6. Au prochain démarrage, notification "mise à jour effectuée"
 
-> La release GitHub **doit** contenir un asset nommé `TMO_Setup.exe` et un asset `TMO_Setup.exe.sha256`.
+> La release GitHub **doit** contenir `TMO_Setup.exe`, `TMO_Setup.exe.sha256` et `TMO_Setup.exe.sha256.sig`.
 
 ---
 

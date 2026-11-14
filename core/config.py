@@ -16,6 +16,22 @@ def clamp_retention_days(days: int) -> int:
     return max(RETENTION_DAYS_MIN, min(RETENTION_DAYS_MAX, days))
 
 
+MAX_RECORDING_MINUTES_MAX = 1440
+
+
+def clamp_max_recording_minutes(minutes: int) -> int:
+    # 0 (ou moins) = dead man's switch désactivé
+    return max(0, min(MAX_RECORDING_MINUTES_MAX, minutes))
+
+
+def clean_site_url(value: str) -> str:
+    """URL du site toujours en http(s):// : passée à chrome.exe, elle ne peut pas être lue comme une option."""
+    text = value.strip()
+    if not text or text.lower().startswith(("https://", "http://")):
+        return text
+    return "https://" + text
+
+
 VALID_INPUT_MODES = ("camera", "external_scanner_keyboard", "external_scanner_serial")
 
 
@@ -111,13 +127,13 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
     max_recording_minutes = os.environ.get("TMO_MAX_RECORDING_MINUTES")
     if max_recording_minutes is not None and max_recording_minutes.strip() != "":
         try:
-            cfg.max_recording_minutes = int(max_recording_minutes)
+            cfg.max_recording_minutes = clamp_max_recording_minutes(int(max_recording_minutes))
         except ValueError:
             pass
 
     site_url = os.environ.get("TMO_SITE_URL")
     if site_url is not None and site_url.strip() != "":
-        cfg.site_url = site_url
+        cfg.site_url = clean_site_url(site_url)
 
     scan_roi_percent = os.environ.get("TMO_SCAN_ROI_PERCENT")
     if scan_roi_percent is not None and scan_roi_percent.strip() != "":
@@ -189,12 +205,12 @@ def load_config() -> tuple[AppConfig, str | None]:
                         pass
                 if "max_recording_minutes" in data:
                     try:
-                        cfg.max_recording_minutes = int(data["max_recording_minutes"])
+                        cfg.max_recording_minutes = clamp_max_recording_minutes(int(data["max_recording_minutes"]))
                     except Exception:
                         pass
                 if "site_url" in data:
                     try:
-                        cfg.site_url = str(data["site_url"])
+                        cfg.site_url = clean_site_url(str(data["site_url"]))
                     except Exception:
                         pass
                 if "scan_roi_percent" in data:

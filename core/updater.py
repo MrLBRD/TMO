@@ -11,7 +11,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -43,6 +42,14 @@ _ALLOWED_UPDATE_HOSTS = frozenset(
 )
 
 
+# Plafond de taille de l'installateur (l'EXE actuel fait ~100 Mo).
+MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+
+# Hash vérifié (signature + SHA256) de chaque installateur téléchargé, par chemin :
+# run_installer() refuse tout fichier absent de ce registre ou modifié depuis.
+_verified_installers: dict[str, str] = {}
+
+
 def _is_allowed_update_url(url: str | None) -> bool:
     if not url:
         return False
@@ -51,6 +58,17 @@ def _is_allowed_update_url(url: str | None) -> bool:
         return parsed.scheme == "https" and parsed.hostname in _ALLOWED_UPDATE_HOSTS
     except Exception:
         return False
+
+
+def _get(url: str, **kwargs) -> requests.Response:
+    """GET qui refuse la réponse si une redirection a quitté les hôtes GitHub autorisés."""
+    response = requests.get(url, **kwargs)
+    for hop in (*response.history, response):
+        if not _is_allowed_update_url(hop.url):
+            response.close()
+            log.error("update_redirect_blocked url_host=%s", urlparse(hop.url or "").hostname)
+            raise ValueError("redirection hors GitHub refusée")
+    return response
 
 
 @dataclass
@@ -95,7 +113,7 @@ def check_for_updates(current_version: str, timeout: float = 5.0) -> UpdateInfo:
         UpdateInfo with update details or error
     """
     try:
-        response = requests.get(
+        response = _get(
             GITHUB_API_URL,
             headers={"Accept": "application/vnd.github.v3+json"},
             timeout=timeout,
@@ -179,6 +197,26 @@ def check_for_updates(current_version: str, timeout: float = 5.0) -> UpdateInfo:
         )
 
 
+def prepare_update(current_version: str) -> tuple[str | None, str]:
+    """Vérifie GitHub puis télécharge et vérifie la nouvelle version (thread de fond).
+
+    Returns:
+        (chemin de l'installateur vérifié, message) si une mise à jour est prête ;
+        (None, message court) en cas d'échec ; (None, "") si l'app est à jour.
+    """
+    info = check_for_updates(current_version)
+    if info.error:
+        return None, f"Mise à jour : {info.error}"
+    if not info.available:
+        return None, ""
+    ok, result = download_update(
+        info.download_url or "", sha256_url=info.sha256_url, signature_url=info.signature_url
+    )
+    if not ok:
+        return None, f"Mise à jour v{info.latest_version} non installée : {result}"
+    return result, f"Mise à jour v{info.latest_version} prête : installée à la fermeture"
+
+
 def verify_sha256_signature(sha256_bytes: bytes, signature_b64: bytes, public_key_b64: str) -> bool:
     """True si signature_b64 est une signature ed25519 valide de sha256_bytes."""
     try:
@@ -190,7 +228,7 @@ def verify_sha256_signature(sha256_bytes: bytes, signature_b64: bytes, public_ke
 
 
 def _fetch_small(url: str, timeout: float = 10.0, max_bytes: int = 4096) -> bytes:
-    response = requests.get(url, timeout=timeout)
+    response = _get(url, timeout=timeout)
     response.raise_for_status()
     if len(response.content) > max_bytes:
         raise ValueError("fichier trop volumineux")
@@ -249,10 +287,12 @@ def download_update(
             pass
 
     try:
-        response = requests.get(download_url, stream=True, timeout=timeout)
+        response = _get(download_url, stream=True, timeout=timeout)
         response.raise_for_status()
 
         total_size = int(response.headers.get("content-length", 0))
+        if total_size > MAX_INSTALLER_BYTES:
+            raise ValueError("installateur trop volumineux")
 
         # Hash calculé pendant l'écriture : on ne relit pas le fichier sur disque.
         digest = hashlib.sha256()
@@ -263,6 +303,8 @@ def download_update(
                     f.write(chunk)
                     digest.update(chunk)
                     downloaded += len(chunk)
+                    if downloaded > MAX_INSTALLER_BYTES:
+                        raise ValueError("installateur trop volumineux")
                     if progress_callback:
                         progress_callback(downloaded, total_size)
 
@@ -273,6 +315,7 @@ def download_update(
             return False, "Vérification d'intégrité échouée — installateur potentiellement altéré"
 
         log.info("update_download_complete path=%s bytes=%d", installer_path, downloaded)
+        _verified_installers[installer_path] = expected_hash
         return True, installer_path
 
     except requests.exceptions.Timeout:
@@ -297,52 +340,43 @@ def download_update(
         return False, f"Erreur: {e}"
 
 
-def run_installer(installer_path: str) -> tuple[bool, str]:
-    """
-    Run the downloaded installer and exit the application.
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    Args:
-        installer_path: Path to the downloaded installer
+
+def run_installer(installer_path: str, silent: bool = False) -> tuple[bool, str]:
+    """
+    Lance l'installateur téléchargé par download_update(), après avoir revérifié son hash.
+
+    L'installateur peut attendre des heures dans %TEMP% (installation à la
+    fermeture) : on refuse un fichier inconnu ou modifié depuis la vérification.
+    silent : installation sans assistant (/SILENT), l'UAC reste demandé.
 
     Returns:
         Tuple of (success, error_message_if_failed)
     """
-    if not os.path.exists(installer_path):
+    expected = _verified_installers.get(installer_path)
+    try:
+        if expected is None or _file_sha256(installer_path) != expected:
+            log.error("update_installer_unverified")
+            return False, "Installateur non vérifié — installation refusée"
+    except OSError:
         return False, "Fichier d'installation non trouvé"
 
+    args = [installer_path, "/SILENT"] if silent else [installer_path]
     try:
-        # Launch installer
         if os.name == "nt":
-            # Windows: use subprocess to launch installer
             subprocess.Popen(
-                [installer_path],
+                args,
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
             )
         else:
-            # Non-Windows: try to open with default handler
             subprocess.Popen(["open", installer_path])
-
         return True, ""
 
     except Exception as e:
         return False, f"Impossible de lancer l'installateur: {e}"
-
-
-def check_for_updates_async(
-    current_version: str,
-    callback: Callable[[UpdateInfo], None],
-) -> None:
-    """
-    Check for updates in a background thread.
-
-    Args:
-        current_version: Current app version
-        callback: Function to call with UpdateInfo result
-    """
-
-    def _work() -> None:
-        result = check_for_updates(current_version)
-        callback(result)
-
-    thread = threading.Thread(target=_work, name="tmo_update_check", daemon=True)
-    thread.start()

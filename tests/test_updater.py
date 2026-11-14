@@ -90,9 +90,14 @@ _INSTALLER = b"MZ fake installer" * 1000
 
 
 class _Resp:
-    def __init__(self, content: bytes):
+    def __init__(self, content: bytes, url: str = _GH, history: list | None = None):
         self.content = content
         self.headers = {"content-length": str(len(content))}
+        self.url = url
+        self.history = history or []
+
+    def close(self):
+        pass
 
     def raise_for_status(self):
         pass
@@ -118,7 +123,7 @@ def release(monkeypatch):
         _GH + "TMO_Setup.exe.sha256": sha,
         _GH + "TMO_Setup.exe.sha256.sig": base64.b64encode(key.sign(sha)),
     }
-    monkeypatch.setattr(updater.requests, "get", lambda url, **kw: _Resp(files[url]))
+    monkeypatch.setattr(updater.requests, "get", lambda url, **kw: _Resp(files[url], url))
     return files
 
 
@@ -159,6 +164,90 @@ class TestDownloadUpdateSignature:
         ok, msg = _download()
         assert not ok and "intégrité" in msg
         assert not (tmp_path / "d").exists()
+
+
+class TestDownloadUpdateHostsAndSize:
+    def test_redirect_outside_github_refused(self, release, monkeypatch):
+        evil = "https://evil.example/TMO_Setup.exe"
+        real_get = updater.requests.get
+
+        def get(url, **kw):
+            r = real_get(url, **kw)
+            if url.endswith(".exe"):
+                return _Resp(r.content, evil, history=[_Resp(b"", url)])
+            return r
+
+        monkeypatch.setattr(updater.requests, "get", get)
+        ok, msg = _download()
+        assert not ok and "redirection" in msg
+
+    def test_redirect_to_github_cdn_accepted(self, release, monkeypatch):
+        real_get = updater.requests.get
+        cdn = "https://release-assets.githubusercontent.com/x"
+        monkeypatch.setattr(
+            updater.requests, "get", lambda url, **kw: _Resp(real_get(url).content, cdn, [_Resp(b"", url)])
+        )
+        assert _download()[0]
+
+    def test_oversized_installer_refused(self, release, monkeypatch):
+        monkeypatch.setattr(updater, "MAX_INSTALLER_BYTES", len(_INSTALLER) - 1)
+        ok, msg = _download()
+        assert not ok and "volumineux" in msg
+
+
+class TestRunInstaller:
+    def test_unknown_file_refused(self, tmp_path):
+        f = tmp_path / "TMO_Setup.exe"
+        f.write_bytes(b"MZ")
+        assert updater.run_installer(str(f)) == (False, "Installateur non vérifié — installation refusée")
+
+    def test_file_modified_after_download_refused(self, release, monkeypatch):
+        launched = []
+        monkeypatch.setattr(updater.subprocess, "Popen", lambda args, **kw: launched.append(args))
+        ok, path = _download()
+        with open(path, "ab") as f:
+            f.write(b"x")
+        assert updater.run_installer(path)[0] is False
+        assert launched == []
+
+    def test_verified_file_launched(self, release, monkeypatch):
+        launched = []
+        monkeypatch.setattr(updater.subprocess, "Popen", lambda args, **kw: launched.append(args))
+        monkeypatch.setattr(updater.os, "name", "nt")
+        monkeypatch.setattr(updater.subprocess, "DETACHED_PROCESS", 0, raising=False)
+        monkeypatch.setattr(updater.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False)
+        ok, path = _download()
+        assert updater.run_installer(path, silent=True) == (True, "")
+        assert launched == [[path, "/SILENT"]]
+
+
+class TestPrepareUpdate:
+    def _info(self, **kw):
+        base = dict(available=True, current_version="1.0.0", latest_version="9.9.9",
+                    download_url=_GH + "TMO_Setup.exe", sha256_url=_GH + "TMO_Setup.exe.sha256",
+                    signature_url=_GH + "TMO_Setup.exe.sha256.sig")
+        base.update(kw)
+        return updater.UpdateInfo(**base)
+
+    def test_ready(self, release, monkeypatch):
+        monkeypatch.setattr(updater, "check_for_updates", lambda v: self._info())
+        path, msg = updater.prepare_update("1.0.0")
+        assert path and "9.9.9 prête" in msg
+
+    def test_up_to_date(self, monkeypatch):
+        monkeypatch.setattr(updater, "check_for_updates", lambda v: self._info(available=False))
+        assert updater.prepare_update("9.9.9") == (None, "")
+
+    def test_network_error_short_message(self, monkeypatch):
+        monkeypatch.setattr(updater, "check_for_updates", lambda v: self._info(available=False, error="Délai d'attente dépassé"))
+        assert updater.prepare_update("1.0.0") == (None, "Mise à jour : Délai d'attente dépassé")
+
+    def test_bad_signature_nothing_ready(self, release, monkeypatch):
+        other, _ = _keypair()
+        release[_GH + "TMO_Setup.exe.sha256.sig"] = base64.b64encode(other.sign(b"x"))
+        monkeypatch.setattr(updater, "check_for_updates", lambda v: self._info())
+        path, msg = updater.prepare_update("1.0.0")
+        assert path is None and "non installée" in msg
 
 
 class TestReleaseSigningScript:
