@@ -17,9 +17,13 @@ core/
 chrome_extension/
   background.js      — Service worker MV3 : suit les onglets TMO ouverts, ferme les anciens ;
                         relaie le raccourci global d'impression (chrome.commands) vers l'onglet actif
+  reuse.js           — Réutilisation de l'onglet commande déjà chargé (chargé par background.js) :
+                        fait ouvrir la commande par la page WCBM (`tmo-open-order`) au lieu de
+                        recharger wp-admin ; repli sur le nouvel onglet au moindre doute
   content_script.js  — Injecté sur wp-admin/admin.php* : écoute le raccourci "onglet actif"
                         (paramétrable, voir options.js) et les messages relayés par background.js ;
                         émet l'event DOM `tmo-print-request` que le plugin WordPress écoute
+                        relaie aussi `tmo-open-order` / `tmo-open-order-ack` (réutilisation d'onglet)
   options.html/.js   — Page de réglages : choix du raccourci "onglet actif" (chrome.storage.sync)
   manifest.json      — Permissions : tabs, storage, alarms ; content script sur wp-admin/admin.php*
 ```
@@ -35,7 +39,7 @@ chrome_extension/
 2. Arrêt de l'enregistrement précédent (si actif)
 3. Démarrage nouvel enregistrement
 4. Ouverture Chrome sur `/wp-admin/admin.php?page=wc-better-management&orderCheck={order_id}&tmoTab=1[&carrierCode=…]` (`tmoTab=1` : marqueur lu par l'extension, conservé après l'impression contrairement à `orderCheck`)
-5. Extension Chrome ferme les anciens onglets TMO
+5. Extension Chrome : si un onglet commande est déjà chargé, il ouvre la commande et le nouvel onglet est fermé (`notes/guide_architecture_impression.md` §7) ; sinon elle ferme les anciens onglets TMO
 6. Prochain scan ou STOP manuel → enregistrement arrêté
 
 # Tech Stack
