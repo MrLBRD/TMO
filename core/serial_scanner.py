@@ -12,7 +12,6 @@ log = logging.getLogger(__name__)
 _LINE_TERMINATORS = (0x0D, 0x0A)  # CR, LF — acceptés seuls ou combinés (CRLF)
 _RECONNECT_DELAY_SECONDS = 2.0
 _READ_TIMEOUT_SECONDS = 0.2
-_READ_CHUNK_SIZE = 64
 
 
 def list_serial_ports() -> list[tuple[str, str]]:
@@ -66,7 +65,9 @@ class SerialScanner:
     def _read_loop(self, ser: "serial.Serial") -> None:
         buf = bytearray()
         while not self._stop_event.is_set():
-            chunk = ser.read(_READ_CHUNK_SIZE)
+            # Lit ce qui est déjà arrivé, sans attendre un bloc plein : read(64)
+            # retenait chaque scan de moins de 64 octets jusqu'au timeout (0,2 s).
+            chunk = ser.read(ser.in_waiting or 1)
             if not chunk:
                 continue
             for byte in chunk:
