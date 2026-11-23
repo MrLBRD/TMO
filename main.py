@@ -1162,7 +1162,7 @@ class TmoApp(ctk.CTk):
         self.after(10, self._update_frame)
         self.after(100, self._poll_events)
         self.after(400, self._refocus_scanner_entry)
-        self.after(50, self._poll_serial_scanner)
+        self.after(20, self._poll_serial_scanner)
         if getattr(sys, "frozen", False):  # pas en développement (python main.py)
             self.after(5000, self._auto_update_check)
 
@@ -1453,7 +1453,7 @@ class TmoApp(ctk.CTk):
             except queue.Empty:
                 pass
 
-        self.after(50, self._poll_serial_scanner)
+        self.after(20, self._poll_serial_scanner)
 
     def _on_config_clicked(self) -> None:
         if self._config_window is not None and self._config_window.winfo_exists():
