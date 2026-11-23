@@ -1,3 +1,5 @@
+importScripts("reuse.js");
+
 const TARGET_PATH = "/wp-admin/admin.php";
 const TARGET_PARAM = "wc-better-management";
 const STORAGE_KEY = "tmo_tracked_tabs";
@@ -187,20 +189,46 @@ async function cleanupTabs(reason) {
   if (toClose.length || errors.length) console.info("[TMO] cleanup", report);
 }
 
-// Tracker quand une tab TMO est créée
+// Onglets tout juste créés dont l'URL n'était pas encore connue à onCreated :
+// la réutilisation est retentée au premier onUpdated qui la donne. En mémoire
+// seulement — si le service worker redémarre entre-temps, on retombe sur le
+// comportement sans réutilisation.
+const freshTabs = new Set();
+
+// Ouverture TMO dans un nouvel onglet : on essaie d'abord de faire ouvrir la
+// commande par l'onglet déjà en place (reuse.js). Le candidat est celui que
+// cleanupTabs garderait (onglet TMO le plus récent) : la réutilisation ne
+// prend donc jamais un onglet wc-better-management ouvert à la main, et le
+// cleanup qui suit conserve bien l'onglet réutilisé.
+async function handleTmoOpen(tab, url, reason) {
+  const orderId = extractOrderId(url);
+  const candidate = (await getTmoTabs()).find(t => t.id !== tab.id);
+  const reused = await tryReuseTab(chrome, candidate, tab, url);
+  // Réutilisé : c'est l'onglet existant qui porte désormais la commande
+  // (cible du raccourci d'impression global via le tracking).
+  await trackTab(reused ? candidate.id : tab.id, orderId);
+  await cleanupTabs(reused ? "reused" : reason);
+}
+
+// Tracker quand une tab TMO est créée. pendingUrl : pour un onglet ouvert par
+// `chrome.exe <url>`, tab.url est encore vide à ce stade.
 chrome.tabs.onCreated.addListener((tab) => {
-  if (tab.url && isTmoOpenUrl(tab.url)) {
-    serialized(async () => {
-      await trackTab(tab.id, extractOrderId(tab.url));
-      await cleanupTabs("created");
-    });
+  const url = tab.pendingUrl || tab.url;
+  if (url && isTmoOpenUrl(url)) {
+    serialized(() => handleTmoOpen(tab, url, "created"));
+  } else if (tab.id !== undefined) {
+    freshTabs.add(tab.id);
   }
 });
 
 // Tracker quand une tab est mise à jour avec orderCheck
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Un onglet reste « neuf » tant qu'il n'a pas reçu de vraie adresse
+  // (about:blank et page Nouvel onglet ne comptent pas).
+  const fresh = !!changeInfo.url && changeInfo.url.startsWith("http") && freshTabs.delete(tabId);
   if (changeInfo.url && isTmoOpenUrl(changeInfo.url)) {
     serialized(async () => {
+      if (fresh) return handleTmoOpen(tab, changeInfo.url, "updated");
       await trackTab(tabId, extractOrderId(changeInfo.url));
       await cleanupTabs("updated");
     });
@@ -214,6 +242,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // Nettoyer le tracking quand une tab est fermée
 chrome.tabs.onRemoved.addListener((tabId) => {
+  freshTabs.delete(tabId);
   serialized(() => untrackTab(tabId));
 });
 

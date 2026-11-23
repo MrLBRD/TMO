@@ -41,6 +41,32 @@ function dispatchPrintRequest(source) {
   window.dispatchEvent(new CustomEvent("tmo-print-request", { detail: { source } }));
 }
 
+// Réutilisation de l'onglet (voir chrome_extension/reuse.js) : demande à la
+// page WCBM d'ouvrir une commande sans rechargement, et renvoie sa réponse
+// (`tmo-open-order-ack`) à background.js. Sans réponse à temps — ancienne
+// version de WCBM sans cet écouteur — on répond ok:false : background.js garde
+// alors le nouvel onglet.
+const OPEN_ORDER_ACK_TIMEOUT_MS = 450; // sous les 500 ms de background.js
+
+function relayOpenOrder(orderId, sendResponse) {
+  let done = false;
+  const finish = (ok, reason) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    window.removeEventListener("tmo-open-order-ack", onAck);
+    sendResponse({ orderId, ok, reason });
+  };
+  const onAck = (e) => {
+    const d = e.detail;
+    if (d && Number(d.orderId) === orderId) finish(d.ok === true, String(d.reason || ""));
+  };
+  window.addEventListener("tmo-open-order-ack", onAck);
+  const timer = setTimeout(() => finish(false, "timeout"), OPEN_ORDER_ACK_TIMEOUT_MS);
+  window.dispatchEvent(new CustomEvent("tmo-open-order", { detail: { orderId } }));
+  return true; // réponse asynchrone : garde le canal sendResponse ouvert
+}
+
 window.addEventListener(
   "keydown",
   (e) => {
@@ -56,5 +82,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request && request.action === "tmo-print-request") {
     dispatchPrintRequest(request.source || "global_shortcut");
     sendResponse({ status: "ACK" });
+  } else if (request && request.action === "tmo-open-order") {
+    return relayOpenOrder(request.orderId, sendResponse);
   }
 });

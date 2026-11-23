@@ -194,3 +194,76 @@ un unique événement DOM déjà dédupliqué par canal, et gère l'anti-rebond 
 Pour éviter qu'une pression sur la touche ne déclenche 2 impressions si l'onglet passe du statut focus à non-focus simultanément :
 * Le drapeau `isPrintingProcessActive` bloque tout deuxième déclenchement survenu dans la fenêtre des 2000 ms.
 * Le mécanisme garantit un comportement déterministe quel que soit l'état du navigateur.
+
+---
+
+## 7. Réutilisation de l'onglet commande (23/11/2026)
+
+**Problème** : à chaque scan, TMO lance `chrome.exe <url>` → nouvel onglet → page wp-admin
+complète rechargée (≈ 120 scripts) avant que la popup de la commande n'apparaisse.
+
+**Principe** : si un onglet commande TMO est déjà chargé dans la même fenêtre, l'extension
+lui fait ouvrir la nouvelle commande sans rechargement, puis ferme le nouvel onglet.
+
+```
+TMO : chrome.exe …&orderCheck=4242&tmoTab=1
+        │
+        ▼
+background.js  chrome.tabs.onCreated (tab.pendingUrl)
+        │  candidat = onglet TMO le plus récent (celui que cleanupTabs garderait)
+        │  conditions (reuse.js) : même fenêtre, même site, status "complete", non déchargé,
+        │  orderCheck entier
+        ▼
+chrome.tabs.sendMessage(candidat, { action: "tmo-open-order", orderId })
+        ▼
+content_script.js  window.dispatchEvent("tmo-open-order", { detail: { orderId } })
+        ▼
+Page WCBM  ouvre la popup, répond window.dispatchEvent("tmo-open-order-ack",
+           { detail: { orderId, ok: true|false, reason } })
+        ▼
+background.js  ok:true  → active l'onglet existant, ferme le nouveau (cleanup "reused")
+               sinon    → ne touche à rien : le nouvel onglet charge comme avant
+```
+
+**Contrat avec WCBM** (ne pas modifier d'un seul côté) :
+- `tmo-open-order` — `CustomEvent` sur `window`, `detail: { orderId: <int> }` ;
+- `tmo-open-order-ack` — `detail: { orderId, ok, reason }`. `ok: false` = la page ne peut pas
+  (impression en cours, page trop ancienne…). Une ancienne version de WCBM ne répond pas.
+- L'accusé doit partir **tout de suite** (dans l'écouteur, sans `setTimeout` ni
+  `requestAnimationFrame`) : au moment de la demande l'onglet est en arrière-plan, où Chrome
+  ralentit les minuteries et suspend `requestAnimationFrame`.
+
+**Un scan n'est jamais perdu** : le nouvel onglet n'est fermé qu'après un `ok: true` portant
+le bon `orderId` *et* l'activation réussie de l'onglet existant. Refus, pas de réponse sous
+500 ms (450 ms côté content script), pas de content script, ancien content script, onglet
+dans une autre fenêtre ou encore en chargement, identifiant non numérique → comportement
+d'avant (nouvel onglet gardé, anciens fermés). Si l'accusé arrive après le délai, la
+commande est ouverte dans les deux onglets et le cleanup garde le nouveau.
+
+**Pourquoi `chrome.tabs.onCreated`** : c'est le premier événement émis, et `tab.pendingUrl`
+(déjà couvert par la permission `tabs`) donne l'URL avant toute navigation — `tab.url` est
+encore vide. `webNavigation.onBeforeNavigate` arrive après et demanderait une permission de
+plus ; `onCommitted` arrive une fois la réponse du serveur reçue, trop tard. Si l'URL n'est
+pas connue à la création (onglet ouvert vide puis navigué), la tentative se fait au premier
+`onUpdated` qui la donne (`freshTabs`). **Aucune permission ajoutée.**
+
+**Limite connue** : la requête HTML du nouvel onglet part quand même vers le serveur (elle
+est annulée à la fermeture, quelques millisecondes plus tard) ; Chrome ne permet pas de la
+retenir le temps de la décision. Ce qui est économisé : le téléchargement et l'exécution des
+scripts, le rendu, et l'attente de l'opérateur. Pour supprimer aussi cette requête, il
+faudrait que TMO n'ouvre plus directement l'URL wp-admin (voir « Pistes » ci-dessous).
+
+**Impression** : l'onglet réutilisé est enregistré dans le tracking avec la nouvelle
+commande ; `findPrintTarget()` le retrouve (étape 1 si WCBM remet `orderCheck` dans l'URL,
+étape 2 sinon).
+
+**Tests** : `tests/extension_reuse.test.js` (Node, faux `chrome.tabs`), lancé par
+`pytest` via `tests/test_extension_reuse.py`.
+
+**Pistes non codées (côté TMO)** :
+- TMO ouvre une page locale de l'extension (`chrome-extension://<id>/open.html?order=…`)
+  qui décide puis, en cas d'échec seulement, navigue vers wp-admin : plus aucune requête
+  inutile. Demande un identifiant d'extension fixe (`"key"` dans le manifest) et un repli
+  dans TMO si l'extension est absente.
+- Messagerie native (`nativeMessaging`) entre TMO et l'extension : plus d'onglet du tout,
+  mais installation d'un hôte natif sur le poste (clé de registre) et permission en plus.
