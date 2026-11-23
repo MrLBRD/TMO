@@ -1547,7 +1547,9 @@ class TmoApp(ctk.CTk):
             return
         self.after(UPDATE_CHECK_INTERVAL_MS, self._auto_update_check)
         threading.Thread(
-            target=lambda: self._update_events.put(prepare_update(__version__)),
+            target=lambda: self._update_events.put(
+                prepare_update(__version__, notify=lambda m: self._update_events.put((None, m)))
+            ),
             name="tmo_auto_update",
             daemon=True,
         ).start()

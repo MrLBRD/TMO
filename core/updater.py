@@ -197,7 +197,7 @@ def check_for_updates(current_version: str, timeout: float = 5.0) -> UpdateInfo:
         )
 
 
-def prepare_update(current_version: str) -> tuple[str | None, str]:
+def prepare_update(current_version: str, notify=None) -> tuple[str | None, str]:
     """Vérifie GitHub puis télécharge et vérifie la nouvelle version (thread de fond).
 
     Returns:
@@ -209,6 +209,8 @@ def prepare_update(current_version: str) -> tuple[str | None, str]:
         return None, f"Mise à jour : {info.error}"
     if not info.available:
         return None, ""
+    if notify:  # le téléchargement (~90 Mo) prend du temps : l'opérateur doit voir qu'il a lieu
+        notify(f"Téléchargement de la mise à jour v{info.latest_version}…")
     ok, result = download_update(
         info.download_url or "", sha256_url=info.sha256_url, signature_url=info.signature_url
     )

@@ -273,3 +273,16 @@ class TestReleaseSigningScript:
         sha.write_bytes(b"abc")
         with pytest.raises(SystemExit):
             release_signing.sign(sha, base64.b64encode(raw).decode())
+
+
+def test_prepare_update_annonce_le_telechargement(monkeypatch):
+    from core import updater
+
+    monkeypatch.setattr(
+        updater, "check_for_updates",
+        lambda v: updater.UpdateInfo(available=True, current_version=v, latest_version="9.9.9", download_url="u"),
+    )
+    monkeypatch.setattr(updater, "download_update", lambda *a, **k: (True, "C:/x.exe"))
+    messages = []
+    assert updater.prepare_update("1.0.0", notify=messages.append)[0] == "C:/x.exe"
+    assert messages == ["Téléchargement de la mise à jour v9.9.9…"]
