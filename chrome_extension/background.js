@@ -1,5 +1,26 @@
 importScripts("reuse.js");
 
+// Mise à jour par TMO (23/11/2026) : l'installeur remplace les fichiers du dossier
+// chrome_extension, mais Chrome garde l'ancienne version d'une extension non empaquetée
+// tant qu'on ne la recharge pas. On relit le manifest sur le disque au démarrage du
+// service worker et toutes les 10 min (et à chaque scan, voir onCreated) : version
+// différente = rechargement automatique, sans geste dans chrome://extensions.
+async function reloadIfUpdated() {
+  try {
+    const res = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" });
+    const onDisk = (await res.json()).version;
+    if (onDisk && onDisk !== chrome.runtime.getManifest().version) {
+      chrome.runtime.reload();
+      return true;
+    }
+  } catch (e) {
+    // Lecture impossible : on garde la version chargée.
+  }
+  return false;
+}
+reloadIfUpdated();
+setInterval(reloadIfUpdated, 10 * 60 * 1000);
+
 const TARGET_PATH = "/wp-admin/admin.php";
 const TARGET_PARAM = "wc-better-management";
 const STORAGE_KEY = "tmo_tracked_tabs";
@@ -215,7 +236,9 @@ async function handleTmoOpen(tab, url, reason) {
 chrome.tabs.onCreated.addListener((tab) => {
   const url = tab.pendingUrl || tab.url;
   if (url && isTmoOpenUrl(url)) {
-    serialized(() => handleTmoOpen(tab, url, "created"));
+    // Extension mise à jour par TMO depuis son chargement : on recharge, et cet onglet se
+    // charge normalement (pas de réutilisation pour ce scan).
+    serialized(async () => (await reloadIfUpdated()) ? undefined : handleTmoOpen(tab, url, "created"));
   } else if (tab.id !== undefined) {
     freshTabs.add(tab.id);
   }
