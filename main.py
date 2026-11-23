@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.3.10"
+__version__ = "1.3.11"
 
 import ctypes
 from ctypes import wintypes
@@ -22,7 +22,7 @@ from PIL import Image
 from customtkinter import CTkImage
 import cv2
 
-from core.config import AppConfig, load_config, log_path, save_config, resolve_output_dir, check_if_just_updated, set_last_run_version
+from core.config import AppConfig, load_config, log_path, save_config, resolve_output_dir, set_last_run_version
 from core.logging_setup import setup_logging
 from core.recorder import Recorder, RecorderEvent, list_cameras
 from core.serial_scanner import SerialScanner, list_serial_ports
@@ -1661,52 +1661,12 @@ def _show_config_error_notice(parent: ctk.CTk, message: str) -> None:
     dialog.lift()
 
 
-def _show_extension_reload_notice(parent: ctk.CTk) -> None:
-    """Show a dialog reminding user to reload the Chrome extension after update."""
-    dialog = ctk.CTkToplevel(parent)
-    dialog.title("Extension mise à jour")
-    dialog.geometry("420x180")
-    dialog.resizable(False, False)
-    dialog.grab_set()
-
-    try:
-        dialog.attributes("-topmost", True)
-    except Exception:
-        pass
-
-    dialog.grid_columnconfigure(0, weight=1)
-
-    ctk.CTkLabel(
-        dialog,
-        text="🔄 L'application a été mise à jour !",
-        font=("Arial", 16, "bold"),
-    ).grid(row=0, column=0, padx=20, pady=(20, 10))
-
-    ctk.CTkLabel(
-        dialog,
-        text="Pensez à recharger l'extension Chrome :\n"
-             "1. Ouvrir chrome://extensions\n"
-             "2. Cliquer sur 🔄 à côté de \"TMO Woo Admin Cleaner\"",
-        justify="left",
-    ).grid(row=1, column=0, padx=20, pady=10)
-
-    ctk.CTkButton(
-        dialog,
-        text="Compris",
-        command=dialog.destroy,
-    ).grid(row=2, column=0, padx=20, pady=(10, 20))
-
-    dialog.lift()
-
-
 def main() -> None:
     setup_logging(log_path())
 
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
 
-    # Check if app was just updated
-    just_updated = check_if_just_updated(__version__)
     set_last_run_version(__version__)
 
     log.info("app_started version=%s", __version__)
@@ -1734,10 +1694,6 @@ def main() -> None:
     if config_error:
         log.warning("config_corrupted: %s", config_error)
         app.after(300, lambda: _show_config_error_notice(app, config_error))
-
-    # Show extension reload notice after update
-    if just_updated:
-        app.after(500, lambda: _show_extension_reload_notice(app))
 
     app.mainloop()
     log.info("app_stopped")
