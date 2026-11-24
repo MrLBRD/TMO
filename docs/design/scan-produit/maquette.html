@@ -118,13 +118,52 @@ svg { display: block; flex: none; }
   .part { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: no-preference) { .ligne, .verdict { transition: background-color .16s cubic-bezier(.23,1,.32,1); } }
+
+/* confirmation visuelle */
+.visuel { display: grid; grid-template-columns: 112px 1fr; gap: 16px; padding: 4px 16px 16px; align-items: center; }
+.visuel .grande { width: 112px; height: 112px; border-radius: 14px; background: #343946; display: grid; place-items: center; color: #7e8697; border: 2px dashed var(--alerte); }
+.visuel .nom { font-weight: 700; font-size: 18px; line-height: 1.25; }
+.visuel .gros-taille { display: inline-block; margin-top: 8px; padding: 0 16px; border-radius: 10px; background: #000; color: #fff; font-weight: 700; font-size: 52px; line-height: 1.15; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.visuel .gros-qte { margin-top: 8px; font-weight: 700; font-size: 52px; line-height: 1; color: var(--alerte); font-variant-numeric: tabular-nums; }
+.visuel .unite { font-size: 20px; color: var(--doux); font-weight: 400; margin-left: 8px; }
+.verdict.vert .gros-ok { font-size: 28px; }
+
+/* barres */
+.stats { display: grid; gap: 22px; background: var(--carte); border: 1px solid var(--trait); border-radius: var(--r-carte); padding: 22px 24px; }
+.stats h3 { margin: 0 0 8px; font-size: 18px; }
+.piste2 { height: 40px; border-radius: 8px; overflow: hidden; display: flex; gap: 2px; background: var(--carte-2); }
+.piste2 i { display: grid; place-items: center; font-style: normal; font-weight: 700; font-size: 15px; color: #05281c; min-width: 0; }
+.piste2 .v { background: var(--ok); }
+.piste2 .b { background: var(--attendu); color: #fff; }
+.piste2 .a { background: var(--alerte); color: #2a1c00; }
+.legende2 { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 8px; color: var(--doux); font-size: 15px; }
+.legende2 .cle { display: inline-flex; align-items: center; gap: 8px; }
+.legende2 .cle i { width: 14px; height: 14px; border-radius: 4px; }
+.verdict-bloc { display: flex; align-items: center; gap: 16px; padding: 18px 22px; border-radius: var(--r-carte); background: var(--ok-fond); border: 2px solid var(--ok); margin-top: 16px; font-weight: 700; font-size: 20px; }
+.verdict-bloc small { display: block; font-weight: 400; font-size: 16px; color: #bfeedd; margin-top: 2px; }
+
+/* canal */
+.canal { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 0; align-items: stretch; background: var(--carte); border: 1px solid var(--trait); border-radius: var(--r-carte); padding: 24px; }
+.noeud { border-radius: 14px; background: var(--carte-2); padding: 18px; display: grid; gap: 8px; justify-items: center; text-align: center; align-content: center; font-weight: 700; font-size: 19px; }
+.noeud .pict { width: 56px; height: 56px; border-radius: 14px; display: grid; place-items: center; }
+.fleches { display: grid; gap: 10px; padding: 0 16px; align-content: center; }
+.fl { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; font-weight: 700; font-size: 16px; }
+.fl svg { width: 22px; height: 22px; }
+.fl.now { background: var(--ok-fond); color: #7be3b8; }
+.fl.later { background: transparent; color: var(--doux); border: 2px dashed var(--doux); }
+.roles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+.role { background: var(--carte); border: 1px solid var(--trait); border-radius: var(--r-carte); padding: 16px; display: grid; gap: 10px; align-content: start; font-weight: 700; }
+.chip { justify-self: start; font-size: 13px; padding: 2px 10px; border-radius: 99px; font-weight: 700; }
+.chip.reste { background: var(--ok-fond); color: #7be3b8; }
+.chip.peut { background: var(--alerte-fond); color: #ffd185; }
+@media (max-width: 900px) { .canal { grid-template-columns: 1fr; gap: 12px; } .roles { grid-template-columns: repeat(2, 1fr); } }
 </style>
 </head>
 <body>
 <main>
 
 <h1>Scanner les produits pendant la préparation</h1>
-<p class="sous">Proposition. Maquette de l'écran TMO et choix pour les articles sans code-barres.</p>
+<p class="sous">Révision après les réponses d'Arnaud : codes 2019… jamais collés, clé TMO ↔ site acceptée.</p>
 
 <!-- icônes -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -151,7 +190,7 @@ svg { display: block; flex: none; }
   <div class="flux">
     <div class="pas"><div class="pict" style="background:var(--attendu-fond);color:#9fc0ff"><svg width="36" height="36"><use href="#i-ticket"/></svg></div><p>Scanne le ticket</p><small>comme aujourd'hui</small></div>
     <div class="pas"><div class="pict" style="background:var(--ko-fond);color:#ff9c97"><svg width="36" height="36"><use href="#i-rec"/></svg></div><p>La vidéo démarre</p><small>comme aujourd'hui</small></div>
-    <div class="pas"><div class="pict" style="background:var(--alerte-fond);color:#ffd185"><svg width="36" height="36"><use href="#i-scan"/></svg></div><p>Scanne chaque produit</p><small>nouveau</small></div>
+    <div class="pas"><div class="pict" style="background:var(--alerte-fond);color:#ffd185"><svg width="36" height="36"><use href="#i-scan"/></svg></div><p>Scanne, ou regarde et clique</p><small>nouveau</small></div>
     <div class="pas"><div class="pict" style="background:var(--ok-fond);color:#7be3b8"><svg width="36" height="36"><use href="#i-check"/></svg></div><p>Tout est vert</p><small>nouveau</small></div>
   </div>
 </section>
@@ -241,19 +280,49 @@ svg { display: block; flex: none; }
       </div>
     </figure>
 
-    <!-- F sans EAN -->
+    <!-- F confirmation visuelle -->
     <figure class="cadre" style="margin:0">
-      <figcaption><span class="pill ambre">F</span> Article sans code-barres</figcaption>
+      <figcaption><span class="pill ambre">F</span> Sans code : on regarde</figcaption>
       <div class="tmo">
         <div class="tete"><span class="rec"><i></i>REC</span><span class="cmd">482913</span><span class="transp">DPD</span></div>
-        <div class="compte"><b>3/4</b><span>pièces</span></div>
-        <div class="barre"><i style="width:75%"></i></div>
+        <div class="compte"><b>2/4</b><span>pièces</span></div>
+        <div class="barre"><i style="width:50%"></i></div>
+        <div class="visuel">
+          <div class="grande"><svg width="56" height="56"><use href="#i-shoe"/></svg></div>
+          <div><div class="nom">Crampons de rechange Adidas</div><span class="gros-taille">13 mm</span></div>
+        </div>
+        <div class="verdict ambre"><svg width="40" height="40"><use href="#i-hand"/></svg><div>Même photo, même taille ?</div><span class="bouton">C'est bon</span></div>
+      </div>
+    </figure>
+
+    <!-- G gros lot -->
+    <figure class="cadre" style="margin:0">
+      <figcaption><span class="pill ambre">G</span> Sans code, gros lot</figcaption>
+      <div class="tmo">
+        <div class="tete"><span class="rec"><i></i>REC</span><span class="cmd">482913</span><span class="transp">DPD</span></div>
+        <div class="compte"><b>2/26</b><span>pièces</span></div>
+        <div class="barre"><i style="width:8%"></i></div>
+        <div class="visuel">
+          <div class="grande"><svg width="56" height="56"><use href="#i-shoe"/></svg></div>
+          <div><div class="nom">Crampons de rechange Adidas 13 mm</div><div class="gros-qte">x24<span class="unite">à compter</span></div></div>
+        </div>
+        <div class="verdict ambre"><svg width="40" height="40"><use href="#i-hand"/></svg><div>Compte 24</div><span class="bouton">C'est bon</span></div>
+      </div>
+    </figure>
+
+    <!-- H complet -->
+    <figure class="cadre" style="margin:0">
+      <figcaption><span class="pill vert">H</span> Commande complète</figcaption>
+      <div class="tmo">
+        <div class="tete"><span class="rec"><i></i>REC</span><span class="cmd">482913</span><span class="transp">DPD</span></div>
+        <div class="compte"><b>4/4</b><span>pièces</span></div>
+        <div class="barre"><i style="width:100%"></i></div>
         <div class="lignes">
           <div class="ligne fait"><div class="photo"><svg width="28" height="28"><use href="#i-check"/></svg></div><div><div class="nom">Crampons Mercurial Vapor</div><span class="taille">42</span></div><div class="etat"><span class="qte">x1</span></div></div>
           <div class="ligne fait"><div class="photo"><svg width="28" height="28"><use href="#i-check"/></svg></div><div><div class="nom">Chaussettes match</div><span class="taille">M</span></div><div class="etat"><span class="qte">x2</span></div></div>
-          <div class="ligne sansean"><div class="photo"><svg width="28" height="28"><use href="#i-ball"/></svg></div><div><div class="nom">Ballon Pro T5</div><span class="badge"><svg width="14" height="14"><use href="#i-barcode"/></svg>sans code</span></div><div class="etat"><span class="qte">x1</span></div></div>
+          <div class="ligne fait"><div class="photo"><svg width="28" height="28"><use href="#i-check"/></svg></div><div><div class="nom">Ballon Pro T5</div></div><div class="etat"><span class="qte">x1</span></div></div>
         </div>
-        <div class="verdict ambre"><svg width="40" height="40"><use href="#i-hand"/></svg><div>Regarde le ballon</div><span class="bouton">C'est bon</span></div>
+        <div class="verdict vert"><svg width="40" height="40"><use href="#i-check"/></svg><div>Tout est bon<small>Imprime l'étiquette</small></div></div>
       </div>
     </figure>
 
@@ -262,47 +331,46 @@ svg { display: block; flex: none; }
 
 <!-- 3 -->
 <section>
-  <div class="bloc-titre"><span class="num">3</span><h2>Les articles sans code-barres du fabricant</h2></div>
-
-  <div class="part">
-    <div class="jauge">
-      <div class="piste">
-        <i style="width:80.8%;background:var(--ok)"></i>
-        <i style="width:18.9%;background:var(--attendu)"></i>
-        <i style="width:.4%;background:var(--alerte)"></i>
+  <div class="bloc-titre"><span class="num">3</span><h2>Ce qui se scanne vraiment</h2></div>
+  <div class="stats">
+    <div>
+      <h3>Commandes (4 059, 90 jours)</h3>
+      <div class="piste2"><i class="v" style="width:80.9%">81 %</i><i class="b" style="width:1.9%"></i><i class="a" style="width:17.2%">17 %</i></div>
+      <div class="legende2">
+        <span class="cle"><i style="background:var(--ok)"></i>tout se scanne</span>
+        <span class="cle"><i style="background:var(--attendu)"></i>2 % mixtes</span>
+        <span class="cle"><i style="background:var(--alerte)"></i>rien ne se scanne</span>
       </div>
-      <div class="legende">
-        <span class="cle"><i style="background:var(--ok)"></i><b>81 %</b> code fabricant : scan direct</span>
-        <span class="cle"><i style="background:var(--attendu)"></i><b>19 %</b> code interne 2019… : à vérifier</span>
-        <span class="cle"><i style="background:var(--alerte)"></i><b>0,4 %</b> aucun code</span>
+    </div>
+    <div>
+      <h3>Pièces (8 931)</h3>
+      <div class="piste2"><i class="v" style="width:45.8%">46 %</i><i class="a" style="width:54.2%">54 %</i></div>
+      <div class="legende2">
+        <span class="cle"><i style="background:var(--ok)"></i>code fabricant</span>
+        <span class="cle"><i style="background:var(--alerte)"></i>code 2019…, pas sur le produit</span>
       </div>
-      <div class="legende">Part des articles vendus ces 90 jours (4 732 lignes).</div>
     </div>
   </div>
+  <div class="verdict-bloc"><svg width="36" height="36" style="color:var(--ok)"><use href="#i-check"/></svg><div>Ça vaut le coup<small>Scan quand il y a un code, un clic devant la photo sinon.</small></div></div>
+</section>
 
-  <div class="choix">
-    <div class="opt reco">
-      <span class="tag">Je conseille</span>
-      <div class="pict" style="color:#7be3b8"><svg width="32" height="32"><use href="#i-click"/></svg></div>
-      <h3>Un clic pour valider</h3>
-      <p>Pour les 0,4 % sans code. L'opérateur regarde l'article et appuie sur « C'est bon ».</p>
-      <div class="ligne-v" style="color:#7be3b8"><svg><use href="#i-check"/></svg>Marche dès le premier jour</div>
-      <div class="ligne-v" style="color:#ffd185"><svg><use href="#i-warn"/></svg>Contrôle humain, pas automatique</div>
+<!-- 4 -->
+<section>
+  <div class="bloc-titre"><span class="num">4</span><h2>Un canal TMO ↔ site, avec une clé</h2></div>
+  <div class="canal">
+    <div class="noeud"><div class="pict" style="background:var(--attendu-fond);color:#9fc0ff"><svg width="32" height="32"><use href="#i-scan"/></svg></div>TMO<span style="font-weight:400;font-size:15px;color:var(--doux)">un poste, une clé</span></div>
+    <div class="fleches">
+      <div class="fl now"><svg><use href="#i-check"/></svg>Articles de la commande</div>
+      <div class="fl now"><svg><use href="#i-check"/></svg>Ce code, c'est quel produit ?</div>
+      <div class="fl later"><svg><use href="#i-ticket"/></svg>Imprimer l'étiquette (plus tard)</div>
     </div>
-    <div class="opt">
-      <div class="pict" style="color:#9fc0ff"><svg width="32" height="32"><use href="#i-barcode"/></svg></div>
-      <h3>Code-barres sur le ticket</h3>
-      <p>On scanne la ligne du ticket, pas le produit.</p>
-      <div class="ligne-v" style="color:#7be3b8"><svg><use href="#i-check"/></svg>Marche pour tous les articles</div>
-      <div class="ligne-v" style="color:#ff9c97"><svg><use href="#i-x"/></svg>Ne prouve pas que le produit est le bon</div>
-    </div>
-    <div class="opt">
-      <div class="pict" style="color:#ffd185"><svg width="32" height="32"><use href="#i-label"/></svg></div>
-      <h3>Étiquette interne en rayon</h3>
-      <p>Pour les 19 % en code 2019…, s'il n'est pas collé sur le produit.</p>
-      <div class="ligne-v" style="color:#7be3b8"><svg><use href="#i-check"/></svg>Contrôle automatique</div>
-      <div class="ligne-v" style="color:#ff9c97"><svg><use href="#i-x"/></svg>Travail de stock : étiqueter</div>
-    </div>
+    <div class="noeud"><div class="pict" style="background:var(--ok-fond);color:#7be3b8"><svg width="32" height="32"><use href="#i-label"/></svg></div>Site<span style="font-weight:400;font-size:15px;color:var(--doux)">lecture seule</span></div>
+  </div>
+  <div class="roles">
+    <div class="role"><span class="chip reste">Reste à l'extension</span>Fermer les anciens onglets</div>
+    <div class="role"><span class="chip reste">Reste à l'extension</span>Rouvrir la commande dans l'onglet</div>
+    <div class="role"><span class="chip peut">Peut passer par TMO</span>Raccourci d'impression</div>
+    <div class="role"><span class="chip reste">Reste dans Chrome</span>Impression de l'étiquette</div>
   </div>
 </section>
 
